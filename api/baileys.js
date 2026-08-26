@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 
 import { waitUntil } from '@vercel/functions'
-import makeWASocket, { Browsers, BufferJSON, DisconnectReason, fetchLatestBaileysVersion, initAuthCreds, proto } from 'baileys'
+import makeWASocket, { Browsers, BufferJSON, DisconnectReason, fetchLatestWaWebVersion, initAuthCreds, proto } from 'baileys'
 import pg from 'pg'
 import pino from 'pino'
 
@@ -9,7 +9,7 @@ export const maxDuration = 300
 
 const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL
 const appSecret = process.env.APP_SECRET || ''
-const logger = pino({ level: 'silent' })
+const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL || 'info' })
 const pool = new pg.Pool({ connectionString: databaseUrl, max: 3, ssl: databaseUrl?.includes('localhost') ? false : { rejectUnauthorized: false } })
 const encryptionKey = createHash('sha256').update(appSecret).digest()
 let schemaPromise
@@ -236,7 +236,7 @@ async function openSocket(sessionId, timeoutMs = 240_000, generationId = null) {
   const startSocket = async () => {
     if (manualClose) return
 
-    const { version, isLatest } = await fetchLatestBaileysVersion()
+    const { version, isLatest } = await fetchLatestWaWebVersion()
 
     console.info('[Baileys] starting socket', {
       sessionId,
@@ -252,6 +252,7 @@ async function openSocket(sessionId, timeoutMs = 240_000, generationId = null) {
       markOnlineOnConnect: false,
       printQRInTerminal: false,
       syncFullHistory: false,
+      qrTimeout: 120_000,
     })
 
     currentSock = sock
@@ -453,10 +454,11 @@ async function waitForOpen(socketHandle, timeoutMs = 25_000) {
 async function handleAction(action, sessionId, body) {
   if (action === 'status') return sessionSnapshot(sessionId)
   if (action === 'connect' || action === 'create') {
+    if (action === 'connect') await clearAuth(sessionId)
     const generationId = randomBytes(16).toString('hex')
     await upsertSession(sessionId, { status: 'connecting', qrcode: null, lastError: null, generationId })
     const handle = await openSocket(sessionId, 240_000, generationId)
-    const first = await Promise.race([handle.first, new Promise(resolve => setTimeout(() => resolve({ kind: 'timeout' }), 25_000))])
+    const first = await Promise.race([handle.first, new Promise(resolve => setTimeout(() => resolve({ kind: 'timeout' }), 90_000))])
     waitUntil(handle.lifetime)
     if (first.kind === 'timeout') throw new Error('O WhatsApp não gerou o QR a tempo.')
     return sessionSnapshot(sessionId)
