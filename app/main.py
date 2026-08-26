@@ -366,47 +366,197 @@ async def create_contact(request: Request, db: Session = Depends(get_db)):
 async def import_contacts(request: Request, db: Session = Depends(get_db)):
     auth = require_auth(request, db)
     form = await checked_form(request, auth[0])
+
     upload = form.get("spreadsheet")
+
     if not upload or not hasattr(upload, "read"):
-        return RedirectResponse("/contacts?error=Selecione+uma+planilha", status_code=303)
+        return RedirectResponse(
+            "/contacts?error=Selecione+uma+planilha",
+            status_code=303,
+        )
+
     try:
-        rows = parse_contacts_file(upload.filename or "", await upload.read(), bool(form.get("all_have_opt_in")), settings.max_import_rows)
+        payload = await upload.read()
+
+        rows = parse_contacts_file(
+            upload.filename or "",
+            payload,
+            bool(form.get("all_have_opt_in")),
+            settings.max_import_rows,
+        )
     except ValueError as exc:
-        return RedirectResponse(f"/contacts?error={str(exc).replace(' ', '+')}", status_code=303)
+        return RedirectResponse(
+            f"/contacts?error={str(exc).replace(' ', '+')}",
+            status_code=303,
+        )
+
     list_name = str(form.get("list_name", "")).strip()
-    contact_list = db.scalar(select(ContactList).where(ContactList.workspace_id == auth[2].id, ContactList.name == list_name))
-    if not contact_list:
-        contact_list = ContactList(workspace_id=auth[2].id, name=list_name, description="Criada pela importação Excel/CSV")
-        db.add(contact_list)
-        db.flush()
-    created = updated = invalid = opted_in = 0
-    for row in rows:
-        try:
-            phone = normalize_phone(row.phone)
-        except ValueError:
-            invalid += 1
-            continue
-        contact = db.scalar(select(Contact).where(Contact.workspace_id == auth[2].id, Contact.phone_e164 == phone))
-        if contact:
-            updated += 1
-            contact.name, contact.email, contact.company = row.name, row.email or contact.email, row.company or contact.company
-        else:
-            created += 1
-            contact = Contact(workspace_id=auth[2].id, name=row.name, phone_e164=phone, email=row.email, company=row.company, source="Excel/CSV")
-            db.add(contact)
+
+    if not list_name:
+        list_name = Path(upload.filename or "Importados").stem
+
+    list_name = list_name[:160] or "Importados"
+
+    created = 0
+    updated = 0
+    invalid = 0
+    opted_in = 0
+    duplicates = 0
+
+    seen_phones = set()
+
+    try:
+        contact_list = db.scalar(
+            select(ContactList).where(
+                ContactList.workspace_id == auth[2].id,
+                ContactList.name == list_name,
+            )
+        )
+
+        if not contact_list:
+            contact_list = ContactList(
+                workspace_id=auth[2].id,
+                name=list_name,
+                description="Criada pela importação Excel/CSV",
+            )
+            db.add(contact_list)
             db.flush()
-        consent = db.scalar(select(Consent).where(Consent.contact_id == contact.id, Consent.channel == "whatsapp"))
-        if not consent:
-            consent = Consent(workspace_id=auth[2].id, contact_id=contact.id, channel="whatsapp", status="unknown", source="import")
-            db.add(consent)
-        if row.opt_in:
-            consent.status, consent.granted_at = "opted_in", now()
-            opted_in += 1
-        if not db.scalar(select(ListContact.id).where(ListContact.list_id == contact_list.id, ListContact.contact_id == contact.id)):
-            db.add(ListContact(list_id=contact_list.id, contact_id=contact.id))
-    write_log(db, auth[2].id, "success", "contacts", "contacts.imported", "Importação concluída.", details={"created": created, "updated": updated, "invalid": invalid, "opted_in": opted_in})
-    db.commit()
-    return RedirectResponse(f"/contacts?imported={created}&updated={updated}&invalid={invalid}&opted_in={opted_in}", status_code=303)
+
+        for row in rows:
+            try:
+                phone = normalize_phone(row.phone)
+            except ValueError:
+                invalid += 1
+                continue
+
+            if phone in seen_phones:
+                duplicates += 1
+                continue
+
+            seen_phones.add(phone)
+
+            incoming_name = (row.name or "").strip()
+
+            if incoming_name.startswith("Contato ") and row.company:
+                incoming_name = row.company
+
+            incoming_name = (
+                incoming_name
+                or row.company
+                or f"Contato {created + updated + 1}"
+            )[:160]
+
+            incoming_email = (row.email or "").strip()[:320] or None
+            incoming_company = (row.company or "").strip()[:160] or None
+
+            contact = db.scalar(
+                select(Contact).where(
+                    Contact.workspace_id == auth[2].id,
+                    Contact.phone_e164 == phone,
+                )
+            )
+
+            if contact:
+                updated += 1
+
+                if incoming_name:
+                    contact.name = incoming_name
+
+                if incoming_email:
+                    contact.email = incoming_email
+
+                if incoming_company:
+                    contact.company = incoming_company
+
+            else:
+                contact = Contact(
+                    workspace_id=auth[2].id,
+                    name=incoming_name,
+                    phone_e164=phone,
+                    email=incoming_email,
+                    company=incoming_company,
+                    source="Excel/CSV",
+                )
+
+                db.add(contact)
+                db.flush()
+
+                created += 1
+
+            consent = db.scalar(
+                select(Consent).where(
+                    Consent.contact_id == contact.id,
+                    Consent.channel == "whatsapp",
+                )
+            )
+
+            if not consent:
+                consent = Consent(
+                    workspace_id=auth[2].id,
+                    contact_id=contact.id,
+                    channel="whatsapp",
+                    status="unknown",
+                    source="import",
+                )
+
+                db.add(consent)
+
+                # Importante porque SessionLocal usa autoflush=False
+                db.flush()
+
+            if row.opt_in:
+                consent.status = "opted_in"
+                consent.granted_at = now()
+                opted_in += 1
+
+            association = db.scalar(
+                select(ListContact.id).where(
+                    ListContact.list_id == contact_list.id,
+                    ListContact.contact_id == contact.id,
+                )
+            )
+
+            if not association:
+                db.add(
+                    ListContact(
+                        list_id=contact_list.id,
+                        contact_id=contact.id,
+                    )
+                )
+
+                # Faz a associação ficar visível antes da próxima linha.
+                db.flush()
+
+        write_log(
+            db,
+            auth[2].id,
+            "success",
+            "contacts",
+            "contacts.imported",
+            "Importação concluída.",
+            details={
+                "created": created,
+                "updated": updated,
+                "invalid": invalid,
+                "duplicates": duplicates,
+                "opted_in": opted_in,
+            },
+        )
+
+        db.commit()
+
+    except IntegrityError:
+        db.rollback()
+
+        return RedirectResponse(
+            "/contacts?error=Não+foi+possível+importar+a+planilha.+Verifique+telefones+duplicados+ou+dados+inválidos.",
+            status_code=303,
+        )
+
+    return RedirectResponse(
+        f"/contacts?imported={created}&updated={updated}&invalid={invalid}&duplicates={duplicates}&opted_in={opted_in}",
+        status_code=303,
+    )
 
 
 @app.get("/contacts/template.csv")
