@@ -2,7 +2,6 @@
 {% block title %}Conectar Baileys • Nexo Flow{% endblock %}
 {% block content %}
 {% set status_labels = {'connected': 'Conectado', 'connecting': 'Conectando', 'disconnected': 'Desconectado', 'pending': 'Pendente'} %}
-{% set has_qr = connection and (connection.qrcode_svg or connection.qrcode) and not connection.connected %}
 <div class="page-head">
   <div>
     <p class="eyebrow">Baileys • API não oficial</p>
@@ -19,35 +18,48 @@
 <div class="split-layout">
   <section class="card">
     <h2>Status da sessão</h2>
-    <div id="connection-hero" class="connection-hero {{ 'connected' if connection and connection.connected else 'unknown' }}"><i></i><span>{{ 'Conectado ao WhatsApp' if connection and connection.connected else 'Aguardando conexão' }}</span></div>
+
+    <div id="connection-hero" class="connection-hero {{ 'connected' if connection and connection.connected else 'unknown' }}">
+      <i></i>
+      <span>{{ 'Conectado ao WhatsApp' if connection and connection.connected else 'Aguardando conexão' }}</span>
+    </div>
+
     <div class="session-metrics">
       <p><span>Status:</span><strong id="connection-status">{{ status_labels.get(connection.status if connection else number.status, 'Aguardando') }}</strong></p>
       <p><span>Telefone:</span><strong id="connection-phone">{{ number.phone_e164 or 'Pendente' }}</strong></p>
     </div>
-    <div id="connected-panel" class="alert success"{% if not connection or not connection.connected %} hidden{% endif %}><strong>Baileys conectado.</strong> Este canal já pode ser usado nas campanhas.</div>
-    <div id="qr-panel" class="qr-panel"{% if not has_qr %} hidden{% endif %}>
-      <div id="qr-render" class="qr-render" aria-label="QR Code de conexão Baileys">
-        {% if connection and connection.qrcode_svg %}
-          {{ connection.qrcode_svg | safe }}
-        {% elif connection and connection.qrcode %}
-          <img src="{{ connection.qrcode }}" alt="QR Code de conexão Baileys">
-        {% endif %}
-      </div>
+
+    <div id="connected-panel" class="alert success"{% if not connection or not connection.connected %} hidden{% endif %}>
+      <strong>Baileys conectado.</strong> Este canal já pode ser usado nas campanhas.
+    </div>
+
+    <div id="qr-panel" class="qr-panel"{% if not connection or not connection.qrcode or connection.connected %} hidden{% endif %}>
+      <div id="qr-render" class="qr-render" role="img" aria-label="QR Code de conexão Baileys"></div>
       <p>Abra o WhatsApp no celular, entre em <strong>Aparelhos conectados</strong> e escaneie o QR.</p>
     </div>
-    <div id="no-qr" class="empty small"{% if connection and (connection.connected or connection.qrcode_svg or connection.qrcode) %} hidden{% endif %}><h3>Preparando conexão</h3><p>O QR aparecerá aqui automaticamente.</p></div>
+
+    <div id="no-qr" class="empty small"{% if connection and (connection.connected or connection.qrcode) %} hidden{% endif %}>
+      <h3>Preparando conexão</h3>
+      <p>O QR aparecerá aqui automaticamente.</p>
+    </div>
+
     <p id="connection-error" class="muted">{{ connection.last_error if connection and connection.last_error else 'O status é consultado automaticamente.' }}</p>
+
     <a class="secondary" href="/whatsapp/baileys/{{ number.id }}">Atualizar status</a>
   </section>
 
   <section class="card">
     <h2>Gerar nova conexão</h2>
     <p class="muted">Use este botão quando o QR expirar ou a sessão for desconectada.</p>
+
     <form method="post" action="/whatsapp/baileys/{{ number.id }}/connect" class="stack">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <button class="primary" type="submit">Gerar novo QR Baileys</button>
     </form>
-    <div class="alert warning">A sessão fica cifrada no PostgreSQL e é reaberta pela Vercel quando necessário.</div>
+
+    <div class="alert warning">
+      A sessão fica cifrada no PostgreSQL e é reaberta pela Vercel quando necessário.
+    </div>
   </section>
 </div>
 
@@ -55,6 +67,9 @@
 <script>
 (() => {
   const statusUrl = {{ ('/api/whatsapp/baileys/' ~ number.id ~ '/status')|tojson }};
+  const initialQr = {{ (connection.qrcode if connection and connection.qrcode else none)|tojson }};
+  const initialQrSvg = {{ (connection.qrcode_svg if connection and connection.qrcode_svg else none)|tojson }};
+
   const hero = document.getElementById('connection-hero');
   const heroText = hero.querySelector('span');
   const statusText = document.getElementById('connection-status');
@@ -64,83 +79,207 @@
   const qrRender = document.getElementById('qr-render');
   const noQr = document.getElementById('no-qr');
   const errorText = document.getElementById('connection-error');
-  const statusLabels = {connected: 'Conectado', connecting: 'Conectando', disconnected: 'Desconectado', pending: 'Pendente'};
+
+  const statusLabels = {
+    connected: 'Conectado',
+    connecting: 'Conectando',
+    disconnected: 'Desconectado',
+    pending: 'Pendente'
+  };
+
   let attempts = 0;
+  let activeObjectUrl = null;
   let lastQrKey = '';
 
   function clearQr() {
+    if (activeObjectUrl) {
+      URL.revokeObjectURL(activeObjectUrl);
+      activeObjectUrl = null;
+    }
+
     qrRender.replaceChildren();
     lastQrKey = '';
   }
 
-  function renderQr(data) {
-    if (data.qrcode_svg) {
-      const key = `svg:${data.qrcode_svg.length}:${data.qrcode_svg.slice(-48)}`;
-      if (key !== lastQrKey) {
-        qrRender.innerHTML = data.qrcode_svg;
-        lastQrKey = key;
-      }
-      return true;
+  function dataUrlToBlob(dataUrl) {
+    const match = /^data:([^;,]+);base64,(.*)$/s.exec(dataUrl);
+
+    if (!match) return null;
+
+    const mime = match[1] || 'image/png';
+    const binary = atob(match[2].replace(/\s/g, ''));
+    const bytes = new Uint8Array(binary.length);
+
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
     }
-    if (data.qrcode) {
-      const key = `img:${data.qrcode.length}:${data.qrcode.slice(-48)}`;
-      if (key !== lastQrKey) {
-        const image = document.createElement('img');
-        image.alt = 'QR Code de conexão Baileys';
-        image.decoding = 'sync';
-        image.src = data.qrcode;
-        qrRender.replaceChildren(image);
-        lastQrKey = key;
-      }
-      return true;
-    }
+
+    return new Blob([bytes], {type: mime});
+  }
+
+  function renderQrSvg(svg) {
+    if (!svg || typeof svg !== 'string') return false;
+
+    const key = `svg:${svg.length}:${svg.slice(-48)}`;
+
+    if (key === lastQrKey) return true;
+
     clearQr();
+
+    qrRender.innerHTML = svg;
+    lastQrKey = key;
+
+    return true;
+  }
+
+  function renderQrImage(value) {
+    if (!value || typeof value !== 'string') return false;
+
+    const key = `img:${value.length}:${value.slice(-48)}`;
+
+    if (key === lastQrKey) return true;
+
+    let source = value;
+
+    if (value.startsWith('data:image/')) {
+      try {
+        const blob = dataUrlToBlob(value);
+
+        if (!blob) return false;
+
+        if (activeObjectUrl) {
+          URL.revokeObjectURL(activeObjectUrl);
+        }
+
+        activeObjectUrl = URL.createObjectURL(blob);
+        source = activeObjectUrl;
+      } catch (error) {
+        console.error('[Baileys QR] Falha ao converter base64 em Blob', error);
+        return false;
+      }
+    }
+
+    const image = document.createElement('img');
+
+    image.alt = 'QR Code de conexão Baileys';
+    image.decoding = 'sync';
+    image.referrerPolicy = 'no-referrer';
+
+    image.addEventListener('error', () => {
+      console.error('[Baileys QR] O navegador não conseguiu decodificar a imagem recebida.');
+      errorText.textContent = 'O QR foi recebido, mas a imagem está inválida. Gere um novo QR Baileys.';
+    }, {once: true});
+
+    image.src = source;
+
+    qrRender.replaceChildren(image);
+
+    lastQrKey = key;
+
+    return true;
+  }
+
+  function renderQr(data) {
+    if (data && renderQrSvg(data.qrcode_svg)) return true;
+    if (data && renderQrImage(data.qrcode)) return true;
+
+    clearQr();
+
     return false;
+  }
+
+  function setQrVisibility(hasQr) {
+    qrPanel.hidden = !hasQr;
+    noQr.hidden = hasQr;
+  }
+
+  if (renderQr({
+    qrcode_svg: initialQrSvg,
+    qrcode: initialQr
+  })) {
+    setQrVisibility(true);
   }
 
   async function poll() {
     attempts += 1;
+
     try {
-      const response = await fetch(statusUrl, {headers: {'Accept': 'application/json'}, cache: 'no-store'});
+      const response = await fetch(statusUrl, {
+        headers: {'Accept': 'application/json'},
+        cache: 'no-store',
+        credentials: 'same-origin'
+      });
+
       if (!response.ok) {
-        let detail = 'Gateway indisponível';
+        let detail = `Falha ao consultar Baileys (${response.status})`;
+
         try {
           const payload = await response.json();
           detail = payload.detail || payload.error || detail;
         } catch (_) {}
+
         throw new Error(detail);
       }
+
       const data = await response.json();
       const status = data.status || 'connecting';
+
       statusText.textContent = statusLabels[status] || 'Aguardando';
       phoneText.textContent = data.phone || 'Pendente';
-      errorText.textContent = data.last_error || (status === 'connecting' ? 'Aguardando o pareamento pelo WhatsApp.' : 'Gere uma nova conexão para exibir o QR.');
+
+      errorText.textContent =
+        data.last_error ||
+        (
+          status === 'connecting'
+            ? 'Aguardando o pareamento pelo WhatsApp.'
+            : 'Gere uma nova conexão para exibir o QR.'
+        );
+
       if (data.connected) {
         hero.classList.add('connected');
         heroText.textContent = 'Conectado ao WhatsApp';
+
         connectedPanel.hidden = false;
-        qrPanel.hidden = true;
+
         clearQr();
+
+        qrPanel.hidden = true;
         noQr.hidden = true;
+
         return;
       }
+
       hero.classList.remove('connected');
-      heroText.textContent = status === 'connecting' ? 'Aguardando conexão' : 'WhatsApp desconectado';
+
+      heroText.textContent =
+        status === 'connecting'
+          ? 'Aguardando conexão'
+          : 'WhatsApp desconectado';
+
       connectedPanel.hidden = true;
-      if (renderQr(data)) {
-        qrPanel.hidden = false;
-        noQr.hidden = true;
-      } else {
-        qrPanel.hidden = true;
-        noQr.hidden = false;
-        if (status === 'disconnected') return;
+
+      const hasQr = renderQr(data);
+
+      setQrVisibility(hasQr);
+
+      if (!hasQr && status === 'disconnected') {
+        return;
       }
+
     } catch (error) {
-      errorText.textContent = error.message || 'Não foi possível consultar o status do Baileys.';
+      console.error('[Baileys status]', error);
+
+      errorText.textContent =
+        error.message ||
+        'Não foi possível consultar o status do Baileys.';
     }
-    if (attempts < 96) window.setTimeout(poll, 2500);
+
+    if (attempts < 96) {
+      window.setTimeout(poll, 2500);
+    }
   }
-  window.setTimeout(poll, 700);
+
+  window.setTimeout(poll, 500);
 })();
 </script>
 {% endif %}
