@@ -1,0 +1,23 @@
+{
+  "name": "nexo-flow-baileys-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gateway local do WhatsApp para o Nexo Flow usando Baileys",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@hapi/boom": "9.1.3",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "dotenv": "16.6.1",
+    "express": "5.1.0",
+    "pino": "9.9.4",
+    "qrcode": "1.5.4"
+  }
+}

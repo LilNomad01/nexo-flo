@@ -1,5 +1,74 @@
 # Nexo Flow Desktop — Windows
 
+## Integração local com WhatsApp (Baileys)
+
+Este repositório agora inclui um gateway local e independente para conectar o
+WhatsApp por QR Code e enviar uma mensagem padrão a contatos autorizados. Ele
+usa a biblioteca não oficial
+[`@whiskeysockets/baileys`](https://github.com/WhiskeySockets/Baileys).
+
+> O código-fonte do aplicativo desktop não estava presente neste repositório.
+> Por isso, a integração foi adicionada como uma API local que pode rodar ao
+> lado do executável e, futuramente, ser chamada pela interface principal.
+
+### Requisitos
+
+- Node.js 20 ou mais recente;
+- WhatsApp instalado no celular;
+- contatos que tenham autorizado o recebimento das mensagens.
+
+### Iniciar
+
+No Windows, dê dois cliques em `Iniciar Nexo Flow WhatsApp.cmd`. Na primeira
+execução, o script cria o `.env`, instala as dependências e abre a tela local.
+
+Se preferir iniciar manualmente, abra o PowerShell nesta pasta e execute:
+
+```powershell
+npm install
+Copy-Item .env.example .env
+npm start
+```
+
+Depois, abra [http://127.0.0.1:3001](http://127.0.0.1:3001), leia o QR Code em
+**WhatsApp → Aparelhos conectados → Conectar aparelho** e preencha o formulário.
+
+A sessão fica somente em `data/baileys-auth/` e esse diretório não é versionado.
+Não compartilhe seu conteúdo: ele contém as chaves de acesso da conta.
+
+### API
+
+- `GET /api/status`: estado da conexão e QR Code atual;
+- `POST /api/connect`: solicita conexão/reconexão;
+- `POST /api/send`: envia uma mensagem;
+- `POST /api/logout`: encerra a sessão e gera outro QR Code.
+
+Exemplo de envio:
+
+```powershell
+$Body = @{
+  phone = "5511999999999"
+  name = "Maria"
+  company = "Empresa Exemplo"
+  consent = $true
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Uri "http://127.0.0.1:3001/api/send" `
+  -Method Post `
+  -ContentType "application/json" `
+  -Body $Body
+```
+
+O campo `message` é opcional. Sem ele, a API usa `DEFAULT_MESSAGE` do `.env`.
+As variáveis `{{nome}}` e `{{empresa}}` são substituídas automaticamente.
+Defina `API_KEY` no `.env` se a API for chamada por outro programa e envie a
+mesma chave no header `X-API-Key`. Por segurança, mantenha `HOST=127.0.0.1`.
+
+Há um intervalo mínimo entre envios e bloqueio de duplicatas acidentais. O
+Baileys não é uma API oficial do WhatsApp; use-o de acordo com os termos da
+plataforma e não envie spam.
+
 ## Executar
 
 1. Descompacte o pacote.
