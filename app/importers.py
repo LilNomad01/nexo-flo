@@ -19,7 +19,7 @@ ALIASES = {
     "name": {"nome", "cliente", "contato", "name"},
     "phone": {"telefone", "celular", "whatsapp", "phone", "numero", "número", "fone"},
     "email": {"email", "e-mail", "mail"},
-    "company": {"empresa", "companhia", "negocio", "negócio", "company"},
+    "company": {"empresa", "companhia", "negocio", "negócio", "company", "nome_da_empresa", "nome_empresa", "nome_fantasia", "razao_social", "razão_social", "clinica", "clínica", "estabelecimento"},
     "opt_in": {"opt_in", "opt-in", "optin", "consentimento", "consent", "autorizado", "autorizacao", "autorização"},
 }
 TRUTHY = {"1", "true", "sim", "yes", "s", "y", "opted_in", "autorizado", "autorizada", "consentido"}
