@@ -1120,25 +1120,111 @@ def get_campaign(db: Session, workspace_id: str, campaign_id: str) -> Campaign:
 @app.get("/campaigns/{campaign_id}", response_class=HTMLResponse)
 def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(get_db)):
     auth = require_auth(request, db)
-    campaign = get_campaign(db, auth[2].id, campaign_id)
+
+    campaign = get_campaign(
+        db,
+        auth[2].id,
+        campaign_id,
+    )
 
     steps = db.scalars(
         select(CampaignStep)
-        .where(CampaignStep.campaign_id == campaign.id)
+        .where(
+            CampaignStep.campaign_id == campaign.id
+        )
         .order_by(CampaignStep.position)
     ).all()
 
-    simulation = simulate_campaign(db, auth[2].id, campaign)
+    contact_list = db.get(
+        ContactList,
+        campaign.list_id,
+    )
+
+    number = db.get(
+        WhatsAppNumber,
+        campaign.phone_number_id,
+    )
+
+    simulation = simulate_campaign(
+        db,
+        auth[2].id,
+        campaign,
+    )
+
+    base_gap = max(
+        1.5,
+        60.0 / max(1, campaign.processing_rate),
+    )
+
+    block_seconds = sum(
+        max(
+            base_gap,
+            float(step.delay_seconds or 4),
+        )
+        for step in steps[1:]
+    )
+
+    if number and number.provider == "baileys":
+        average_lead_gap = (
+            base_gap * 1.15
+            + 1.6
+        )
+        interval_mode = "Inteligente Baileys"
+    else:
+        average_lead_gap = base_gap
+        interval_mode = "Ritmo padrão"
+
+    estimated_seconds = (
+        simulation.eligible
+        * (
+            block_seconds
+            + average_lead_gap
+        )
+    )
+
+    if number and number.provider == "baileys":
+        estimated_seconds += (
+            simulation.eligible // 10
+        ) * 16
+
+    estimated_minutes = (
+        max(
+            1,
+            int(
+                (
+                    estimated_seconds
+                    + 59
+                ) // 60
+            ),
+        )
+        if simulation.eligible
+        else 0
+    )
 
     deliveries = db.execute(
-        select(Message, OutboxJob, Contact)
-        .join(OutboxJob, OutboxJob.message_id == Message.id)
-        .join(Contact, Contact.id == Message.contact_id)
-        .where(Message.campaign_id == campaign.id)
+        select(
+            Message,
+            OutboxJob,
+            Contact,
+        )
+        .join(
+            OutboxJob,
+            OutboxJob.message_id == Message.id,
+        )
+        .join(
+            Contact,
+            Contact.id == Message.contact_id,
+        )
+        .where(
+            Message.campaign_id == campaign.id
+        )
         .order_by(Message.created_at)
     ).all()
 
-    failed_deliveries = sum(job.status == "failed" for _, job, _ in deliveries)
+    failed_deliveries = sum(
+        job.status == "failed"
+        for _, job, _ in deliveries
+    )
 
     return page(
         request,
@@ -1147,7 +1233,11 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
         campaign=campaign,
         step=steps[0] if steps else None,
         steps=steps,
+        contact_list=contact_list,
+        number=number,
         simulation=simulation,
+        estimated_minutes=estimated_minutes,
+        interval_mode=interval_mode,
         deliveries=deliveries,
         failed_deliveries=failed_deliveries,
     )

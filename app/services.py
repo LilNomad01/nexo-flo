@@ -1,3 +1,4 @@
+import random
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -87,6 +88,39 @@ def simulate_campaign(db: Session, workspace_id: str, campaign: Campaign) -> Sim
     return result
 
 
+def _smart_baileys_lead_gap(campaign: Campaign, contact: Contact, lead_index: int) -> float:
+    """
+    Suaviza o ritmo entre destinatários Baileys.
+
+    Mantém o limite da campanha, adiciona uma pequena variação no intervalo,
+    começa um pouco mais devagar e insere pausas periódicas para evitar rajadas.
+    """
+    base_gap = max(
+        1.5,
+        60.0 / max(1, campaign.processing_rate),
+    )
+
+    rng = random.Random(
+        f"{campaign.id}:{contact.id}:{lead_index}"
+    )
+
+    if lead_index < 10:
+        warmup_factor = 1.40
+    elif lead_index < 25:
+        warmup_factor = 1.15
+    else:
+        warmup_factor = 1.0
+
+    jitter_factor = rng.uniform(0.85, 1.25)
+
+    gap = base_gap * warmup_factor * jitter_factor
+
+    if lead_index > 0 and lead_index % 10 == 0:
+        gap += rng.uniform(10.0, 22.0)
+
+    return gap
+
+
 def enqueue_campaign(db: Session, workspace_id: str, campaign: Campaign) -> int:
     steps = list(
         db.scalars(
@@ -96,7 +130,10 @@ def enqueue_campaign(db: Session, workspace_id: str, campaign: Campaign) -> int:
         ).all()
     )
 
-    number = db.get(WhatsAppNumber, campaign.phone_number_id)
+    number = db.get(
+        WhatsAppNumber,
+        campaign.phone_number_id,
+    )
 
     if not steps or not number or number.workspace_id != workspace_id:
         raise ValueError("Campanha sem mensagem ou canal válido.")
@@ -107,17 +144,18 @@ def enqueue_campaign(db: Session, workspace_id: str, campaign: Campaign) -> int:
     queued_from = datetime.now(timezone.utc)
     since = datetime.now(timezone.utc) - timedelta(days=7)
 
-    minimum_gap = 60.0 / max(1, campaign.processing_rate)
+    minimum_gap = max(
+        1.5,
+        60.0 / max(1, campaign.processing_rate),
+    )
 
-    sequence_span = minimum_gap
+    timeline_seconds = 0.0
 
-    for step in steps[1:]:
-        sequence_span += max(
-            minimum_gap,
-            float(step.delay_seconds or 4),
-        )
-
-    for contact in campaign_contacts(db, workspace_id, campaign):
+    for contact in campaign_contacts(
+        db,
+        workspace_id,
+        campaign,
+    ):
         consent = db.scalar(
             select(Consent).where(
                 Consent.contact_id == contact.id,
@@ -129,7 +167,9 @@ def enqueue_campaign(db: Session, workspace_id: str, campaign: Campaign) -> int:
             select(func.count(Message.id)).where(
                 Message.contact_id == contact.id,
                 Message.created_at >= since,
-                Message.status.in_(["sent", "delivered", "read"]),
+                Message.status.in_(
+                    ["sent", "delivered", "read"]
+                ),
             )
         ) or 0
 
@@ -141,20 +181,31 @@ def enqueue_campaign(db: Session, workspace_id: str, campaign: Campaign) -> int:
         ):
             continue
 
+        if eligible_index > 0:
+            if number.provider == "baileys":
+                timeline_seconds += _smart_baileys_lead_gap(
+                    campaign,
+                    contact,
+                    eligible_index,
+                )
+            else:
+                timeline_seconds += minimum_gap
+
         contact_start = queued_from + timedelta(
-            seconds=eligible_index * sequence_span
+            seconds=timeline_seconds
         )
 
-        eligible_index += 1
         elapsed = 0.0
         created_any = False
 
         for index, step in enumerate(steps):
             if index > 0:
-                elapsed += max(
+                block_gap = max(
                     minimum_gap,
                     float(step.delay_seconds or 4),
                 )
+
+                elapsed += block_gap
 
             key = (
                 f"campaign:{campaign.id}:"
@@ -177,7 +228,10 @@ def enqueue_campaign(db: Session, workspace_id: str, campaign: Campaign) -> int:
                 campaign_id=campaign.id,
                 contact_id=contact.id,
                 phone_number_id=number.id,
-                body=render_variables(step.body, contact),
+                body=render_variables(
+                    step.body,
+                    contact,
+                ),
                 status="queued",
                 idempotency_key=key,
             )
@@ -191,7 +245,10 @@ def enqueue_campaign(db: Session, workspace_id: str, campaign: Campaign) -> int:
                     message_id=message.id,
                     idempotency_key=key,
                     status="pending",
-                    available_at=contact_start + timedelta(seconds=elapsed),
+                    available_at=(
+                        contact_start
+                        + timedelta(seconds=elapsed)
+                    ),
                 )
             )
 
@@ -216,6 +273,9 @@ def enqueue_campaign(db: Session, workspace_id: str, campaign: Campaign) -> int:
                 )
 
             created_recipients += 1
+
+            timeline_seconds += elapsed
+            eligible_index += 1
 
     campaign.status = "running"
     campaign.started_at = datetime.now(timezone.utc)

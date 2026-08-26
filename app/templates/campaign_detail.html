@@ -1,132 +1,804 @@
 {% extends "base.html" %}
 {% block title %}{{ campaign.name }} • Nexo Flow{% endblock %}
+
 {% block content %}
+
+<style>
+.campaign-review-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 400px;
+  gap: 24px;
+  align-items: start;
+}
+
+.campaign-info-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.campaign-info-item {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--soft);
+}
+
+.campaign-info-item span {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.campaign-info-item strong {
+  display: block;
+  word-break: break-word;
+}
+
+.mobile-preview-card {
+  position: sticky;
+  top: 20px;
+}
+
+.mobile-preview-title {
+  margin-bottom: 16px;
+}
+
+.whatsapp-phone {
+  width: 100%;
+  max-width: 370px;
+  margin: 0 auto;
+  border-radius: 32px;
+  overflow: hidden;
+  border: 8px solid #18202a;
+  background: #efeae2;
+  box-shadow: 0 18px 45px rgba(15,23,42,.15);
+}
+
+.whatsapp-topbar {
+  background: #075e54;
+  color: white;
+  padding: 18px 16px 14px;
+}
+
+.whatsapp-topbar strong {
+  display: block;
+}
+
+.whatsapp-topbar small {
+  opacity: .8;
+}
+
+.whatsapp-screen {
+  min-height: 500px;
+  padding: 18px 12px 28px;
+  background:
+    linear-gradient(
+      rgba(239,234,226,.93),
+      rgba(239,234,226,.93)
+    );
+}
+
+.whatsapp-message {
+  width: fit-content;
+  max-width: 87%;
+  margin-left: auto;
+  padding: 10px 12px;
+  border-radius: 12px 3px 12px 12px;
+  background: #d9fdd3;
+  color: #111827;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  box-shadow: 0 1px 1px rgba(0,0,0,.08);
+}
+
+.whatsapp-delay {
+  text-align: center;
+  color: #667085;
+  font-size: 12px;
+  margin: 10px 0;
+}
+
+.confirm-campaign-card {
+  margin-top: 24px;
+}
+
+.confirm-summary {
+  padding: 18px;
+  border-radius: 14px;
+  background: var(--soft);
+  margin-bottom: 16px;
+}
+
+.confirm-button {
+  width: 100%;
+  min-height: 58px;
+  font-size: 18px;
+}
+
+.message-count {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 12px;
+  text-align: center;
+}
+
+@media (max-width: 950px) {
+  .campaign-review-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mobile-preview-card {
+    position: static;
+  }
+}
+
+@media (max-width: 600px) {
+  .campaign-info-grid {
+    grid-template-columns: 1fr;
+  }
+}
+</style>
+
+
 <div class="page-head">
-  <div><a class="back" href="/campaigns">← Campanhas</a><h1>{{ campaign.name }}</h1><p class="muted">Fila persistente com envio gradual e idempotente.</p></div>
-  <span id="campaign-status" class="status {{ 'failed' if failed_deliveries else campaign.status }}">{{ 'failed' if failed_deliveries else campaign.status }}</span>
+  <div>
+    <a class="back" href="/campaigns">← Campanhas</a>
+
+    <h1>{{ campaign.name }}</h1>
+
+    <p class="muted">
+      Revise a campanha antes de iniciar os disparos.
+    </p>
+  </div>
+
+  <span
+    id="campaign-status"
+    class="status {{ 'failed' if failed_deliveries else campaign.status }}"
+  >
+    {{ 'failed' if failed_deliveries else campaign.status }}
+  </span>
 </div>
 
-{% if request.query_params.get('started') %}<div class="alert success">Campanha adicionada à fila. Os envios serão processados enquanto esta tela permanecer aberta.</div>{% endif %}
-{% if request.query_params.get('contact_updated') %}<div class="alert success">Telefone atualizado. Confira o número e tente novamente os envios com falha.</div>{% endif %}
-{% if request.query_params.get('retried') %}<div class="alert success">{{ request.query_params.get('retried') }} envio(s) recolocado(s) na fila.</div>{% endif %}
-{% if request.query_params.get('error') %}<div class="alert error">{{ request.query_params.get('error') }}</div>{% endif %}
-{% if failed_deliveries %}
-<div class="alert error"><strong>A campanha terminou com falha.</strong> Corrija abaixo os destinatários indicados e clique em “Tentar falhas novamente”.</div>
+
+{% if request.query_params.get('started') %}
+<div class="alert success">
+  Campanha adicionada à fila.
+  Os envios serão processados gradualmente.
+</div>
 {% endif %}
+
+{% if request.query_params.get('contact_updated') %}
+<div class="alert success">
+  Telefone atualizado.
+</div>
+{% endif %}
+
+{% if request.query_params.get('retried') %}
+<div class="alert success">
+  {{ request.query_params.get('retried') }}
+  envio(s) recolocado(s) na fila.
+</div>
+{% endif %}
+
+{% if request.query_params.get('error') %}
+<div class="alert error">
+  {{ request.query_params.get('error') }}
+</div>
+{% endif %}
+
+{% if failed_deliveries %}
+<div class="alert error">
+  <strong>A campanha terminou com falha.</strong>
+  Confira os destinatários indicados abaixo.
+</div>
+{% endif %}
+
 
 <div class="metric-grid compact">
-  <article class="metric"><span>Selecionados</span><strong>{{ simulation.selected }}</strong></article>
-  <article class="metric"><span>Elegíveis</span><strong>{{ simulation.eligible }}</strong></article>
-  <article class="metric"><span>Opt-outs</span><strong>{{ simulation.opted_out }}</strong></article>
-  <article class="metric"><span>Suprimidos</span><strong>{{ simulation.suppressed }}</strong></article>
-  <article class="metric"><span>Frequency cap</span><strong>{{ simulation.frequency_capped }}</strong></article>
-  <article class="metric"><span>Inválidos</span><strong>{{ simulation.invalid }}</strong></article>
+
+  <article class="metric">
+    <span>Selecionados</span>
+    <strong>{{ simulation.selected }}</strong>
+  </article>
+
+  <article class="metric">
+    <span>Elegíveis</span>
+    <strong>{{ simulation.eligible }}</strong>
+  </article>
+
+  <article class="metric">
+    <span>Opt-outs</span>
+    <strong>{{ simulation.opted_out }}</strong>
+  </article>
+
+  <article class="metric">
+    <span>Suprimidos</span>
+    <strong>{{ simulation.suppressed }}</strong>
+  </article>
+
+  <article class="metric">
+    <span>Frequency cap</span>
+    <strong>{{ simulation.frequency_capped }}</strong>
+  </article>
+
+  <article class="metric">
+    <span>Inválidos</span>
+    <strong>{{ simulation.invalid }}</strong>
+  </article>
+
 </div>
 
-<div class="split-layout">
-  <section class="card grow">
-    <h2>Blocos de mensagem</h2>
-    {% if steps %}
-      {% for item in steps %}
-        <div class="message-preview">
-          <strong>Bloco {{ item.position }}</strong>
-          {% if item.position > 1 %}
-            <small class="muted"> • aguarda {{ item.delay_seconds }}s antes de enviar</small>
-          {% endif %}
-          <div>{{ item.body }}</div>
+
+<div class="campaign-review-grid">
+
+  <div class="stack">
+
+    <section class="card">
+
+      <div class="card-head">
+        <div>
+          <p class="eyebrow">
+            Revisão
+          </p>
+
+          <h2>
+            Informações da campanha
+          </h2>
         </div>
-      {% endfor %}
-    {% else %}
-      <div class="message-preview">Mensagem não configurada.</div>
-    {% endif %}
-    <div class="control-row">
+      </div>
+
+
+      <div class="campaign-info-grid">
+
+        <div class="campaign-info-item">
+          <span>Lista</span>
+
+          <strong>
+            {{ contact_list.name if contact_list else 'Lista não encontrada' }}
+          </strong>
+        </div>
+
+
+        <div class="campaign-info-item">
+          <span>Canal remetente</span>
+
+          <strong>
+            {{ number.display_name if number else 'Canal não encontrado' }}
+          </strong>
+
+          {% if number %}
+          <small>
+            {{ number.provider_label }}
+            {% if number.phone_e164 %}
+            • {{ number.phone_e164 }}
+            {% endif %}
+          </small>
+          {% endif %}
+        </div>
+
+
+        <div class="campaign-info-item">
+          <span>Ritmo configurado</span>
+
+          <strong>
+            {{ campaign.processing_rate }}/min
+          </strong>
+        </div>
+
+
+        <div class="campaign-info-item">
+          <span>Intervalo</span>
+
+          <strong>
+            {{ interval_mode }}
+          </strong>
+        </div>
+
+
+        <div class="campaign-info-item">
+          <span>Blocos</span>
+
+          <strong>
+            {{ steps|length }}
+            mensagem(ns)
+          </strong>
+        </div>
+
+
+        <div class="campaign-info-item">
+          <span>Mensagens previstas</span>
+
+          <strong>
+            {{ simulation.eligible * (steps|length) }}
+          </strong>
+        </div>
+
+
+        <div class="campaign-info-item">
+          <span>Tempo estimado</span>
+
+          <strong>
+            ~ {{ estimated_minutes }} min
+          </strong>
+        </div>
+
+
+        <div class="campaign-info-item">
+          <span>Status</span>
+
+          <strong>
+            {{ campaign.status }}
+          </strong>
+        </div>
+
+      </div>
+
+
       {% if campaign.status == 'running' %}
-      <form method="post" action="/campaigns/{{ campaign.id }}/pause"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="secondary">Pausar</button></form>
+      <div class="control-row">
+
+        <form
+          method="post"
+          action="/campaigns/{{ campaign.id }}/pause"
+        >
+          <input
+            type="hidden"
+            name="csrf"
+            value="{{ csrf }}"
+          >
+
+          <button class="secondary">
+            Pausar campanha
+          </button>
+        </form>
+
+      </div>
+
       {% elif campaign.status == 'paused' %}
-      <form method="post" action="/campaigns/{{ campaign.id }}/resume"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="primary">Continuar</button></form>
+
+      <div class="control-row">
+
+        <form
+          method="post"
+          action="/campaigns/{{ campaign.id }}/resume"
+        >
+          <input
+            type="hidden"
+            name="csrf"
+            value="{{ csrf }}"
+          >
+
+          <button class="primary">
+            Continuar campanha
+          </button>
+        </form>
+
+      </div>
       {% endif %}
-      {% if campaign.status not in ['completed','cancelled','failed'] %}
-      <form method="post" action="/campaigns/{{ campaign.id }}/cancel"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger">Cancelar</button></form>
+
+
+      {% if campaign.status not in ['completed','cancelled','failed','draft'] %}
+      <div class="control-row">
+
+        <form
+          method="post"
+          action="/campaigns/{{ campaign.id }}/cancel"
+        >
+          <input
+            type="hidden"
+            name="csrf"
+            value="{{ csrf }}"
+          >
+
+          <button class="danger">
+            Cancelar campanha
+          </button>
+        </form>
+
+      </div>
       {% endif %}
-    </div>
-  </section>
-  <section class="card">
+
+    </section>
+
+
     {% if failed_deliveries %}
-    <h2>Reprocessar falhas</h2>
-    <p class="muted">Depois de corrigir os números, reenvie somente as mensagens que falharam. Mensagens já aceitas não serão duplicadas.</p>
-    <form method="post" action="/campaigns/{{ campaign.id }}/retry-failed">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <button class="primary full" type="submit">Tentar falhas novamente</button>
-    </form>
-    {% else %}
-    <h2>Iniciar campanha</h2>
-    <p class="muted">Apenas {{ simulation.eligible }} contato(s) passarão para a fila. Jobs duplicados são bloqueados por chave idempotente.</p>
-    <form method="post" action="/campaigns/{{ campaign.id }}/start" class="stack">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label>Digite CONFIRMAR<input name="confirmation" required autocomplete="off"></label>
-      <button class="primary" type="submit" {{ 'disabled' if campaign.status not in ['draft','paused'] or simulation.eligible == 0 else '' }}>Confirmar e enfileirar</button>
-    </form>
+
+    <section class="card">
+
+      <h2>
+        Reprocessar falhas
+      </h2>
+
+      <p class="muted">
+        Depois de corrigir os números,
+        reenvie somente as mensagens que falharam.
+      </p>
+
+      <form
+        method="post"
+        action="/campaigns/{{ campaign.id }}/retry-failed"
+      >
+        <input
+          type="hidden"
+          name="csrf"
+          value="{{ csrf }}"
+        >
+
+        <button
+          class="primary full"
+          type="submit"
+        >
+          Tentar falhas novamente
+        </button>
+      </form>
+
+    </section>
+
+
+    {% elif campaign.status == 'draft' %}
+
+    <section class="card confirm-campaign-card">
+
+      <p class="eyebrow">
+        Última etapa
+      </p>
+
+      <h2>
+        Iniciar campanha
+      </h2>
+
+
+      <div class="confirm-summary">
+
+        <strong>
+          {{ simulation.eligible }} contatos elegíveis
+        </strong>
+
+        <p class="muted">
+          Serão aproximadamente
+          {{ simulation.eligible * (steps|length) }}
+          mensagens distribuídas pela fila.
+        </p>
+
+        <p class="muted">
+          Ritmo:
+          {{ campaign.processing_rate }}/min
+          • {{ interval_mode }}
+          • duração estimada de
+          {{ estimated_minutes }} minutos.
+        </p>
+
+      </div>
+
+
+      <form
+        method="post"
+        action="/campaigns/{{ campaign.id }}/start"
+      >
+        <input
+          type="hidden"
+          name="csrf"
+          value="{{ csrf }}"
+        >
+
+        <button
+          class="primary confirm-button"
+          type="submit"
+          name="confirmation"
+          value="CONFIRMAR"
+          {{ 'disabled' if simulation.eligible == 0 else '' }}
+        >
+          CONFIRMAR CAMPANHA
+        </button>
+      </form>
+
+      <p class="message-count">
+        O clique acima substitui a necessidade de digitar CONFIRMAR.
+      </p>
+
+    </section>
+
     {% endif %}
+
+  </div>
+
+
+  <section class="card mobile-preview-card">
+
+    <div class="mobile-preview-title">
+
+      <p class="eyebrow">
+        Preview
+      </p>
+
+      <h2>
+        WhatsApp
+      </h2>
+
+      <p class="muted">
+        Cada balão será enviado como uma mensagem separada.
+      </p>
+
+    </div>
+
+
+    <div class="whatsapp-phone">
+
+      <div class="whatsapp-topbar">
+
+        <strong>
+          WhatsApp
+        </strong>
+
+        <small>
+          Preview da campanha
+        </small>
+
+      </div>
+
+
+      <div class="whatsapp-screen">
+
+        {% if steps %}
+
+          {% for item in steps %}
+
+            {% if item.position > 1 %}
+
+            <div class="whatsapp-delay">
+              aguarda {{ item.delay_seconds }}s
+            </div>
+
+            {% endif %}
+
+
+            <div class="whatsapp-message">{{ item.body
+              | replace('{{nome}}', 'Maria')
+              | replace('{{empresa}}', 'Clínica Exemplo')
+              | replace('{{telefone}}', '+55 11 99999-9999')
+              | replace('{{email}}', 'contato@empresa.com')
+            }}</div>
+
+          {% endfor %}
+
+        {% else %}
+
+        <div class="whatsapp-message">
+          Nenhuma mensagem configurada.
+        </div>
+
+        {% endif %}
+
+      </div>
+
+    </div>
+
   </section>
+
 </div>
+
 
 {% if deliveries %}
+
 <section class="card delivery-card">
-  <div class="card-head"><div><h2>Resultado dos envios</h2><p class="muted">O motivo exato aparece aqui quando o provedor recusa uma mensagem.</p></div></div>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Contato</th><th>Telefone</th><th>Status</th><th>Tentativas</th><th>Diagnóstico</th></tr></thead>
-      <tbody>
-      {% for message, job, contact in deliveries %}
-        <tr>
-          <td><strong>{{ contact.name }}</strong></td>
-          <td>
-            {% if job.status == 'failed' %}
-            <form method="post" action="/campaigns/{{ campaign.id }}/contacts/{{ contact.id }}" class="inline-phone-form">
-              <input type="hidden" name="csrf" value="{{ csrf }}">
-              <input name="phone" value="{{ contact.phone_e164 }}" required aria-label="Corrigir telefone de {{ contact.name }}">
-              <button class="secondary" type="submit">Salvar</button>
-            </form>
-            {% else %}{{ contact.phone_e164 }}{% endif %}
-          </td>
-          <td><span class="status {{ job.status }}">{{ job.status }}</span></td>
-          <td>{{ job.attempts }}</td>
-          <td class="delivery-error">{{ message.error_message or ('Mensagem aceita pelo provedor.' if message.status in ['sent','delivered','read'] else 'Aguardando processamento.') }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
+
+  <div class="card-head">
+
+    <div>
+
+      <h2>
+        Resultado dos envios
+      </h2>
+
+      <p class="muted">
+        Acompanhe cada mensagem processada.
+      </p>
+
+    </div>
+
   </div>
+
+
+  <div class="table-wrap">
+
+    <table>
+
+      <thead>
+
+        <tr>
+          <th>Contato</th>
+          <th>Telefone</th>
+          <th>Status</th>
+          <th>Tentativas</th>
+          <th>Diagnóstico</th>
+        </tr>
+
+      </thead>
+
+
+      <tbody>
+
+      {% for message, job, contact in deliveries %}
+
+        <tr>
+
+          <td>
+            <strong>
+              {{ contact.name }}
+            </strong>
+          </td>
+
+
+          <td>
+
+            {% if job.status == 'failed' %}
+
+            <form
+              method="post"
+              action="/campaigns/{{ campaign.id }}/contacts/{{ contact.id }}"
+              class="inline-phone-form"
+            >
+
+              <input
+                type="hidden"
+                name="csrf"
+                value="{{ csrf }}"
+              >
+
+              <input
+                name="phone"
+                value="{{ contact.phone_e164 }}"
+                required
+              >
+
+              <button
+                class="secondary"
+                type="submit"
+              >
+                Salvar
+              </button>
+
+            </form>
+
+            {% else %}
+
+            {{ contact.phone_e164 }}
+
+            {% endif %}
+
+          </td>
+
+
+          <td>
+
+            <span class="status {{ job.status }}">
+              {{ job.status }}
+            </span>
+
+          </td>
+
+
+          <td>
+            {{ job.attempts }}
+          </td>
+
+
+          <td class="delivery-error">
+
+            {{ message.error_message or (
+              'Mensagem aceita pelo provedor.'
+              if message.status in ['sent','delivered','read']
+              else 'Aguardando processamento.'
+            ) }}
+
+          </td>
+
+        </tr>
+
+      {% endfor %}
+
+      </tbody>
+
+    </table>
+
+  </div>
+
 </section>
+
 {% endif %}
+
 {% endblock %}
 
+
 {% block scripts %}
+
 {% if campaign.status == 'running' %}
+
 <script>
 (() => {
-  const endpoint = "/api/campaigns/{{ campaign.id }}/process";
-  const csrf = {{ csrf | tojson }};
+
+  const endpoint =
+    "/api/campaigns/{{ campaign.id }}/process";
+
+  const csrf =
+    {{ csrf | tojson }};
+
   let stopped = false;
+
+
   async function tick() {
-    if (stopped || document.hidden) return;
-    const body = new FormData();
-    body.append("csrf", csrf);
-    try {
-      const response = await fetch(endpoint, {method: "POST", body, credentials: "same-origin"});
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const result = await response.json();
-      if (result.status !== "running") {
-        stopped = true;
-        window.location.reload();
-      }
-    } catch (error) {
-      console.warn("Não foi possível processar a fila agora.", error);
+
+    if (
+      stopped
+      || document.hidden
+    ) {
+      return;
     }
+
+    const body =
+      new FormData();
+
+    body.append(
+      "csrf",
+      csrf
+    );
+
+    try {
+
+      const response =
+        await fetch(
+          endpoint,
+          {
+            method: "POST",
+            body,
+            credentials: "same-origin"
+          }
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          `HTTP ${response.status}`
+        );
+      }
+
+      const result =
+        await response.json();
+
+      if (
+        result.status !== "running"
+      ) {
+
+        stopped = true;
+
+        window.location.reload();
+
+      }
+
+    } catch (error) {
+
+      console.warn(
+        "Não foi possível processar a fila agora.",
+        error
+      );
+
+    }
+
   }
-  window.setInterval(tick, 2500);
+
+
+  window.setInterval(
+    tick,
+    2500
+  );
+
   tick();
+
 })();
 </script>
+
 {% endif %}
+
 {% endblock %}
