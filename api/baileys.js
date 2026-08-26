@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, 
 
 import { waitUntil } from '@vercel/functions'
 import makeWASocket, { Browsers, BufferJSON, DisconnectReason, fetchLatestWaWebVersion, initAuthCreds, proto } from 'baileys'
+import QRCode from 'qrcode'
 import pg from 'pg'
 import pino from 'pino'
 
@@ -140,8 +141,39 @@ async function sessionSnapshot(sessionId) {
   const row = result.rows[0]
   if (!row) return { sessionId, status: 'disconnected', connected: false, phone: null, qrcode: null, lastError: null }
   let qrcode = null
-  try { qrcode = row.qr_payload ? decrypt(row.qr_payload) : null } catch { qrcode = null }
-  return { sessionId, status: row.status, connected: row.status === 'connected', phone: row.phone, qrcode, lastError: row.last_error }
+  let qrcode_svg = null
+
+  try {
+    qrcode = row.qr_payload ? decrypt(row.qr_payload) : null
+  } catch {
+    qrcode = null
+  }
+
+  if (qrcode) {
+    try {
+      qrcode_svg = await QRCode.toString(qrcode, {
+        type: 'svg',
+        errorCorrectionLevel: 'M',
+        margin: 3,
+        width: 320,
+      })
+    } catch (error) {
+      console.error('[Baileys] QR SVG generation failed', {
+        sessionId,
+        error: String(error),
+      })
+    }
+  }
+
+  return {
+    sessionId,
+    status: row.status,
+    connected: row.status === 'connected',
+    phone: row.phone,
+    qrcode,
+    qrcode_svg,
+    lastError: row.last_error,
+  }
 }
 
 async function authState(sessionId) {

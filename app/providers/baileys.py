@@ -125,7 +125,7 @@ class BaileysProvider:
             status=status,
             connected=bool(data.get("connected") or status == "connected"),
             qrcode=UazapiProvider._qr_data_url(raw_qr),
-            qrcode_svg=BaileysProvider._qr_svg(raw_qr),
+            qrcode_svg=(str(data.get("qrcode_svg")) if data.get("qrcode_svg") else BaileysProvider._qr_svg(raw_qr)),
             phone=str(data.get("phone")) if data.get("phone") else None,
             last_error=BaileysProvider._display_error(data.get("lastError")),
         )
