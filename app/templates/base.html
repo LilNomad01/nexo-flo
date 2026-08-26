@@ -1,54 +1,632 @@
 <!doctype html>
 <html lang="pt-BR">
+
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{% block title %}Nexo Flow{% endblock %}</title>
-  <meta name="description" content="Gestão profissional da WhatsApp Business Platform.">
-  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
 
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <title>{% block title %}Nexo Flow{% endblock %}</title>
+
+  <meta
+    name="description"
+    content="Gestão profissional da WhatsApp Business Platform."
+  >
+
+  <link
+    rel="icon"
+    href="/static/favicon.svg"
+    type="image/svg+xml"
+  >
+
+  <link
+    rel="preconnect"
+    href="https://fonts.googleapis.com"
+  >
+
+  <link
+    rel="preconnect"
+    href="https://fonts.gstatic.com"
+    crossorigin
+  >
+
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+    rel="stylesheet"
+  >
+
+  <link
+    rel="stylesheet"
+    href="{{ url_for('static', path='app.css') }}"
+  >
 </head>
+
+
 <body>
+
 {% if auth %}
-  <aside class="sidebar">
-    <a class="brand" href="/dashboard"><span class="brandmark">N</span><span>Nexo Flow<small>WhatsApp Suite</small></span></a>
-    <nav>
-      <p class="nav-label">Workspace</p>
-      <a href="/dashboard" class="{{ 'active' if request.url.path == '/dashboard' else '' }}">Visão geral</a>
-      <a href="/conversations" class="{{ 'active' if request.url.path.startswith('/conversations') else '' }}">Conversas</a>
-      <a href="/contacts" class="{{ 'active' if request.url.path.startswith('/contacts') else '' }}">Contatos</a>
-      <a href="/lists" class="{{ 'active' if request.url.path.startswith('/lists') else '' }}">Listas</a>
-      <a href="/campaigns" class="{{ 'active' if request.url.path.startswith('/campaigns') else '' }}">Campanhas</a>
-      <a href="/whatsapp" class="{{ 'active' if request.url.path.startswith('/whatsapp') else '' }}">Números WhatsApp</a>
-      <a href="/logs" class="{{ 'active' if request.url.path.startswith('/logs') else '' }}">Logs em tempo real</a>
-    </nav>
-    <div class="compliance"><strong>Proteção operacional</strong><span>Meta oficial + UAZAPI opcional • hospedado com HTTPS</span></div>
-  </aside>
-  <div class="app-shell">
-    <header class="topbar">
-      <div class="workspace-chip">{{ auth[1].name }}</div>
-      <span class="provider-chip">Canais WhatsApp</span>
-      <a class="ghost" href="/account">Minha conta</a>
-      <form method="post" action="/logout"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="ghost" type="submit">Sair</button></form>
-    </header>
-    <main class="content">{% block content %}{% endblock %}</main>
+
+<div
+  id="sidebar-overlay"
+  class="sidebar-overlay"
+></div>
+
+
+<aside
+  id="app-sidebar"
+  class="sidebar"
+>
+
+  <div class="sidebar-header">
+
+    <a
+      class="brand"
+      href="/dashboard"
+    >
+
+      <span class="brandmark">
+        N
+      </span>
+
+      <span class="brand-copy">
+
+        <strong>
+          Nexo Flow
+        </strong>
+
+        <small>
+          WhatsApp Suite
+        </small>
+
+      </span>
+
+    </a>
+
+
+    <button
+      id="sidebar-close"
+      class="sidebar-close"
+      type="button"
+      aria-label="Fechar menu"
+    >
+      <i data-lucide="panel-left-close"></i>
+    </button>
+
   </div>
+
+
+  <div class="workspace-selector">
+
+    <div class="workspace-avatar">
+      {{ auth[1].name[:1] | upper }}
+    </div>
+
+    <div class="workspace-selector-copy">
+
+      <small>
+        Workspace
+      </small>
+
+      <strong>
+        {{ auth[1].name }}
+      </strong>
+
+    </div>
+
+    <i
+      class="workspace-chevron"
+      data-lucide="chevrons-up-down"
+    ></i>
+
+  </div>
+
+
+  <nav class="sidebar-nav">
+
+    <div class="nav-section">
+
+      <p class="nav-label">
+        Principal
+      </p>
+
+
+      <a
+        href="/dashboard"
+        class="nav-item {{ 'active' if request.url.path == '/dashboard' else '' }}"
+      >
+
+        <span class="nav-icon">
+          <i data-lucide="layout-dashboard"></i>
+        </span>
+
+        <span>
+          Visão geral
+        </span>
+
+      </a>
+
+
+      <a
+        href="/conversations"
+        class="nav-item {{ 'active' if request.url.path.startswith('/conversations') else '' }}"
+      >
+
+        <span class="nav-icon">
+          <i data-lucide="messages-square"></i>
+        </span>
+
+        <span>
+          Conversas
+        </span>
+
+      </a>
+
+
+      <a
+        href="/contacts"
+        class="nav-item {{ 'active' if request.url.path.startswith('/contacts') else '' }}"
+      >
+
+        <span class="nav-icon">
+          <i data-lucide="users-round"></i>
+        </span>
+
+        <span>
+          Contatos
+        </span>
+
+      </a>
+
+
+      <a
+        href="/lists"
+        class="nav-item {{ 'active' if request.url.path.startswith('/lists') else '' }}"
+      >
+
+        <span class="nav-icon">
+          <i data-lucide="list-filter"></i>
+        </span>
+
+        <span>
+          Listas
+        </span>
+
+      </a>
+
+
+      <a
+        href="/campaigns"
+        class="nav-item {{ 'active' if request.url.path.startswith('/campaigns') else '' }}"
+      >
+
+        <span class="nav-icon">
+          <i data-lucide="send"></i>
+        </span>
+
+        <span>
+          Campanhas
+        </span>
+
+      </a>
+
+    </div>
+
+
+    <div class="nav-section">
+
+      <p class="nav-label">
+        WhatsApp
+      </p>
+
+
+      <a
+        href="/whatsapp"
+        class="nav-item {{ 'active' if request.url.path.startswith('/whatsapp') else '' }}"
+      >
+
+        <span class="nav-icon">
+          <i data-lucide="smartphone"></i>
+        </span>
+
+        <span>
+          Canais WhatsApp
+        </span>
+
+      </a>
+
+
+      <a
+        href="/logs"
+        class="nav-item {{ 'active' if request.url.path.startswith('/logs') else '' }}"
+      >
+
+        <span class="nav-icon">
+          <i data-lucide="activity"></i>
+        </span>
+
+        <span>
+          Logs em tempo real
+        </span>
+
+        <span class="nav-live-dot"></span>
+
+      </a>
+
+    </div>
+
+  </nav>
+
+
+  <div class="sidebar-bottom">
+
+    <div class="sidebar-security">
+
+      <span class="sidebar-security-icon">
+        <i data-lucide="shield-check"></i>
+      </span>
+
+      <div>
+
+        <strong>
+          Proteção operacional
+        </strong>
+
+        <small>
+          Ambiente protegido e hospedado com HTTPS.
+        </small>
+
+      </div>
+
+    </div>
+
+
+    <a
+      href="/account"
+      class="sidebar-account"
+    >
+
+      <span class="account-avatar">
+        <i data-lucide="user-round"></i>
+      </span>
+
+      <span class="account-copy">
+
+        <strong>
+          Minha conta
+        </strong>
+
+        <small>
+          Configurações
+        </small>
+
+      </span>
+
+      <i
+        class="account-arrow"
+        data-lucide="chevron-right"
+      ></i>
+
+    </a>
+
+  </div>
+
+</aside>
+
+
+
+<div class="app-shell">
+
+  <header class="topbar">
+
+    <div class="topbar-left">
+
+      <button
+        id="sidebar-open"
+        class="topbar-menu-button"
+        type="button"
+        aria-label="Abrir menu"
+      >
+        <i data-lucide="menu"></i>
+      </button>
+
+
+      <div class="topbar-page">
+
+        {% if request.url.path.startswith('/campaigns') %}
+
+          <span class="topbar-page-icon">
+            <i data-lucide="send"></i>
+          </span>
+
+          <div>
+            <small>Workspace</small>
+            <strong>Campanhas</strong>
+          </div>
+
+        {% elif request.url.path.startswith('/contacts') %}
+
+          <span class="topbar-page-icon">
+            <i data-lucide="users-round"></i>
+          </span>
+
+          <div>
+            <small>Workspace</small>
+            <strong>Contatos</strong>
+          </div>
+
+        {% elif request.url.path.startswith('/lists') %}
+
+          <span class="topbar-page-icon">
+            <i data-lucide="list-filter"></i>
+          </span>
+
+          <div>
+            <small>Workspace</small>
+            <strong>Listas</strong>
+          </div>
+
+        {% elif request.url.path.startswith('/conversations') %}
+
+          <span class="topbar-page-icon">
+            <i data-lucide="messages-square"></i>
+          </span>
+
+          <div>
+            <small>Workspace</small>
+            <strong>Conversas</strong>
+          </div>
+
+        {% elif request.url.path.startswith('/whatsapp') %}
+
+          <span class="topbar-page-icon">
+            <i data-lucide="smartphone"></i>
+          </span>
+
+          <div>
+            <small>Integrações</small>
+            <strong>WhatsApp</strong>
+          </div>
+
+        {% elif request.url.path.startswith('/logs') %}
+
+          <span class="topbar-page-icon">
+            <i data-lucide="activity"></i>
+          </span>
+
+          <div>
+            <small>Sistema</small>
+            <strong>Logs</strong>
+          </div>
+
+        {% else %}
+
+          <span class="topbar-page-icon">
+            <i data-lucide="layout-dashboard"></i>
+          </span>
+
+          <div>
+            <small>Workspace</small>
+            <strong>Visão geral</strong>
+          </div>
+
+        {% endif %}
+
+      </div>
+
+    </div>
+
+
+    <div class="topbar-actions">
+
+      <a
+        href="/campaigns/new"
+        class="topbar-create"
+      >
+
+        <i data-lucide="plus"></i>
+
+        <span>
+          Nova campanha
+        </span>
+
+      </a>
+
+
+      <a
+        href="/whatsapp"
+        class="topbar-whatsapp-status"
+      >
+
+        <span class="topbar-whatsapp-dot"></span>
+
+        <span>
+          WhatsApp
+        </span>
+
+      </a>
+
+
+      <a
+        href="/account"
+        class="topbar-account-button"
+        title="Minha conta"
+      >
+        <i data-lucide="user-round"></i>
+      </a>
+
+
+      <form
+        method="post"
+        action="/logout"
+      >
+
+        <input
+          type="hidden"
+          name="csrf"
+          value="{{ csrf }}"
+        >
+
+        <button
+          class="topbar-logout"
+          type="submit"
+          title="Sair"
+        >
+
+          <i data-lucide="log-out"></i>
+
+        </button>
+
+      </form>
+
+    </div>
+
+  </header>
+
+
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+
+</div>
+
+
 {% else %}
-  <main class="auth-shell">{% block auth_content %}{% endblock %}</main>
+
+<main class="auth-shell">
+  {% block auth_content %}{% endblock %}
+</main>
+
 {% endif %}
-{% block scripts %}{% endblock %}
+
 
 <script src="https://unpkg.com/lucide@latest"></script>
+
 <script>
-  window.addEventListener('DOMContentLoaded', function () {
+(() => {
+
+  function renderIcons() {
     if (window.lucide) {
-      lucide.createIcons();
+      window.lucide.createIcons();
     }
-  });
+  }
+
+  renderIcons();
+
+
+  const sidebar =
+    document.getElementById(
+      'app-sidebar'
+    );
+
+  const overlay =
+    document.getElementById(
+      'sidebar-overlay'
+    );
+
+  const openButton =
+    document.getElementById(
+      'sidebar-open'
+    );
+
+  const closeButton =
+    document.getElementById(
+      'sidebar-close'
+    );
+
+
+  function openSidebar() {
+
+    if (!sidebar) return;
+
+    sidebar.classList.add(
+      'mobile-open'
+    );
+
+    overlay?.classList.add(
+      'visible'
+    );
+
+    document.body.classList.add(
+      'sidebar-mobile-open'
+    );
+
+  }
+
+
+  function closeSidebar() {
+
+    if (!sidebar) return;
+
+    sidebar.classList.remove(
+      'mobile-open'
+    );
+
+    overlay?.classList.remove(
+      'visible'
+    );
+
+    document.body.classList.remove(
+      'sidebar-mobile-open'
+    );
+
+  }
+
+
+  openButton?.addEventListener(
+    'click',
+    openSidebar
+  );
+
+  closeButton?.addEventListener(
+    'click',
+    closeSidebar
+  );
+
+  overlay?.addEventListener(
+    'click',
+    closeSidebar
+  );
+
+
+  document
+    .querySelectorAll(
+      '.sidebar-nav a'
+    )
+    .forEach(link => {
+
+      link.addEventListener(
+        'click',
+        () => {
+
+          if (
+            window.innerWidth <= 900
+          ) {
+            closeSidebar();
+          }
+
+        }
+      );
+
+    });
+
+
+  window.addEventListener(
+    'resize',
+    () => {
+
+      if (
+        window.innerWidth > 900
+      ) {
+        closeSidebar();
+      }
+
+    }
+  );
+
+})();
 </script>
+
+
+{% block scripts %}{% endblock %}
+
 </body>
 </html>
