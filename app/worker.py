@@ -40,13 +40,34 @@ async def _dispatch(job_id: str) -> None:
                 provider_id = await provider.send_text(contact.phone_e164, message.body or "")
             elif number.provider == "baileys":
                 provider = (
-                    VercelBaileysProvider(settings.public_base_url, settings.app_secret, number.phone_number_id)
+                    VercelBaileysProvider(
+                        settings.public_base_url,
+                        settings.app_secret,
+                        number.phone_number_id,
+                    )
                     if number.waba_id == "vercel-internal"
-                    else BaileysProvider(number.waba_id or "", token, number.phone_number_id)
+                    else BaileysProvider(
+                        number.waba_id or "",
+                        token,
+                        number.phone_number_id,
+                    )
                 )
-                if not await provider.check_number(contact.phone_e164):
-                    raise ProviderError("O número do destinatário não está cadastrado no WhatsApp.", "recipient_not_on_whatsapp", False)
-                provider_id = await provider.send_text(contact.phone_e164, message.body or "", message.idempotency_key)
+
+                # O Baileys interno já valida o número dentro do próprio
+                # endpoint de envio. Não abra um segundo socket só para check.
+                if number.waba_id != "vercel-internal":
+                    if not await provider.check_number(contact.phone_e164):
+                        raise ProviderError(
+                            "O número do destinatário não está cadastrado no WhatsApp.",
+                            "recipient_not_on_whatsapp",
+                            False,
+                        )
+
+                provider_id = await provider.send_text(
+                    contact.phone_e164,
+                    message.body or "",
+                    message.idempotency_key,
+                )
             else:
                 raise ProviderError("Provedor de WhatsApp não suportado.", "unsupported_provider", False)
             message.provider_message_id = provider_id
@@ -61,6 +82,67 @@ async def _dispatch(job_id: str) -> None:
             retryable = getattr(exc, "retryable", True)
             job.last_error = str(exc)[:1000]
             message.error_message = job.last_error
+
+            normalized_error = job.last_error.lower()
+
+            baileys_auth_error = (
+                number.provider == "baileys"
+                and any(
+                    marker in normalized_error
+                    for marker in (
+                        "pareada pelo qr",
+                        "pareado pelo qr",
+                        "sessão removida",
+                        "sessao removida",
+                        "logged out",
+                        "loggedout",
+                        "connection replaced",
+                    )
+                )
+            )
+
+            if baileys_auth_error:
+                campaign = (
+                    db.get(Campaign, message.campaign_id)
+                    if message.campaign_id
+                    else None
+                )
+
+                if campaign:
+                    campaign.status = "paused"
+
+                job.status = "paused"
+                job.available_at = datetime.now(timezone.utc) + timedelta(seconds=60)
+
+                message.status = "queued"
+
+                recipient = db.scalar(
+                    select(CampaignRecipient).where(
+                        CampaignRecipient.campaign_id == message.campaign_id,
+                        CampaignRecipient.contact_id == message.contact_id,
+                    )
+                )
+
+                if recipient:
+                    recipient.status = "queued"
+                    recipient.reason = "Canal Baileys precisa ser reconectado."
+
+                write_log(
+                    db,
+                    job.workspace_id,
+                    "warning",
+                    "connection",
+                    "baileys.campaign_paused_auth",
+                    "Campanha pausada porque a sessão Baileys precisa ser reconectada.",
+                    provider="baileys",
+                    campaign_id=message.campaign_id,
+                    contact_id=message.contact_id,
+                    message_id=message.id,
+                    details={"error": job.last_error},
+                )
+
+                return
+
             if retryable and job.attempts < MAX_ATTEMPTS:
                 job.status = "pending"
                 job.available_at = datetime.now(timezone.utc) + timedelta(seconds=min(300, 2 ** job.attempts * 5))
@@ -83,7 +165,16 @@ async def _dispatch(job_id: str) -> None:
 
 def _next_job(workspace_id: Optional[str] = None) -> str:
     with session_scope() as db:
-        query = select(OutboxJob).where(OutboxJob.status == "pending", OutboxJob.available_at <= datetime.now(timezone.utc))
+        query = (
+            select(OutboxJob)
+            .join(Message, Message.id == OutboxJob.message_id)
+            .join(Campaign, Campaign.id == Message.campaign_id)
+            .where(
+                OutboxJob.status == "pending",
+                OutboxJob.available_at <= datetime.now(timezone.utc),
+                Campaign.status == "running",
+            )
+        )
         if workspace_id:
             query = query.where(OutboxJob.workspace_id == workspace_id)
         job = db.scalar(query.order_by(OutboxJob.available_at, OutboxJob.created_at).limit(1).with_for_update(skip_locked=True))

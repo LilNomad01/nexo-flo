@@ -714,12 +714,9 @@
 
 
 {% block scripts %}
-
 {% if campaign.status == 'running' %}
-
 <script>
 (() => {
-
   const endpoint =
     "/api/campaigns/{{ campaign.id }}/process";
 
@@ -727,16 +724,34 @@
     {{ csrf | tojson }};
 
   let stopped = false;
+  let processing = false;
+  let timer = null;
 
+  function scheduleNext(delay = 3000) {
+    if (stopped) return;
+
+    clearTimeout(timer);
+
+    timer = window.setTimeout(
+      tick,
+      delay
+    );
+  }
 
   async function tick() {
+    if (stopped) return;
 
-    if (
-      stopped
-      || document.hidden
-    ) {
+    if (document.hidden) {
+      scheduleNext(3000);
       return;
     }
+
+    if (processing) {
+      scheduleNext(1500);
+      return;
+    }
+
+    processing = true;
 
     const body =
       new FormData();
@@ -747,14 +762,13 @@
     );
 
     try {
-
       const response =
         await fetch(
           endpoint,
           {
             method: "POST",
             body,
-            credentials: "same-origin"
+            credentials: "same-origin",
           }
         );
 
@@ -770,35 +784,43 @@
       if (
         result.status !== "running"
       ) {
-
         stopped = true;
 
         window.location.reload();
 
+        return;
       }
 
     } catch (error) {
-
       console.warn(
         "Não foi possível processar a fila agora.",
         error
       );
 
-    }
+    } finally {
+      processing = false;
 
+      if (!stopped) {
+        scheduleNext(3000);
+      }
+    }
   }
 
-
-  window.setInterval(
-    tick,
-    2500
+  document.addEventListener(
+    "visibilitychange",
+    () => {
+      if (
+        !document.hidden
+        && !stopped
+        && !processing
+      ) {
+        scheduleNext(250);
+      }
+    }
   );
 
   tick();
-
 })();
 </script>
-
 {% endif %}
 
-{% endblock %}

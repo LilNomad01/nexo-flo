@@ -243,6 +243,42 @@ async function clearAuth(sessionId) {
   await pool.query('DELETE FROM baileys_auth_state WHERE session_id=$1', [sessionId])
 }
 
+async function withSessionLock(sessionId, callback) {
+  const client = await pool.connect()
+  const lockName = `baileys:${sessionId}`
+  let locked = false
+
+  try {
+    const result = await client.query(
+      'SELECT pg_try_advisory_lock(hashtext($1)::bigint) AS locked',
+      [lockName],
+    )
+
+    locked = result.rows[0]?.locked === true
+
+    if (!locked) {
+      const error = new Error(
+        'A sessão Baileys está ocupada com outro envio. Tente novamente em alguns segundos.'
+      )
+      error.status = 429
+      throw error
+    }
+
+    return await callback()
+  } finally {
+    if (locked) {
+      try {
+        await client.query(
+          'SELECT pg_advisory_unlock(hashtext($1)::bigint)',
+          [lockName],
+        )
+      } catch {}
+    }
+
+    client.release()
+  }
+}
+
 async function openSocket(sessionId, timeoutMs = 240_000, generationId = null) {
   const { state, saveCreds } = await authState(sessionId)
 
@@ -462,6 +498,10 @@ async function openSocket(sessionId, timeoutMs = 240_000, generationId = null) {
       clearTimeout(timer)
     }),
 
+    flush: async () => {
+      await saveCreds()
+    },
+
     close: () => {
       manualClose = true
       clearTimeout(timer)
@@ -505,30 +545,130 @@ async function handleAction(action, sessionId, body) {
     } finally { handle.close() }
   }
   if (action === 'messages') {
-    await ensureSchema()
-    const existing = await pool.query('SELECT message_id FROM baileys_sent_requests WHERE session_id=$1 AND request_id=$2', [sessionId, body.requestId])
-    if (existing.rows[0]) return { id: existing.rows[0].message_id, duplicate: true }
-    const handle = await openSocket(sessionId, 50_000)
-    try {
-      await waitForOpen(handle)
-      const to = String(body.to || '').replace(/\D/g, '')
-      const text = String(body.text || '').trim()
-      const [checked] = await handle.sock.onWhatsApp(to)
-      if (!checked?.exists) {
-        const error = new Error('O número do destinatário não está cadastrado no WhatsApp.')
-        error.status = 422
-        throw error
-      }
-      const sent = await handle.sock.sendMessage(checked.jid, { text })
-      const messageId = sent?.key?.id
-      if (!messageId) throw new Error('O WhatsApp não retornou o ID da mensagem.')
-      await pool.query(
-        'INSERT INTO baileys_sent_requests (session_id, request_id, message_id) VALUES ($1,$2,$3) ON CONFLICT (session_id, request_id) DO NOTHING',
-        [sessionId, body.requestId, messageId],
+    return withSessionLock(sessionId, async () => {
+      await ensureSchema()
+
+      const existing = await pool.query(
+        'SELECT message_id FROM baileys_sent_requests WHERE session_id=$1 AND request_id=$2',
+        [sessionId, body.requestId],
       )
-      return { id: messageId }
-    } finally { handle.close() }
+
+      if (existing.rows[0]) {
+        return {
+          id: existing.rows[0].message_id,
+          duplicate: true,
+        }
+      }
+
+      const handle = await openSocket(
+        sessionId,
+        70_000,
+      )
+
+      try {
+        await waitForOpen(
+          handle,
+          35_000,
+        )
+
+        const to = String(
+          body.to || ''
+        ).replace(/\D/g, '')
+
+        const text = String(
+          body.text || ''
+        ).trim()
+
+        if (!to) {
+          const error = new Error(
+            'Número do destinatário inválido.'
+          )
+          error.status = 422
+          throw error
+        }
+
+        if (!text) {
+          const error = new Error(
+            'A mensagem está vazia.'
+          )
+          error.status = 422
+          throw error
+        }
+
+        const [checked] =
+          await handle.sock.onWhatsApp(to)
+
+        if (!checked?.exists) {
+          const error = new Error(
+            'O número do destinatário não está cadastrado no WhatsApp.'
+          )
+          error.status = 422
+          throw error
+        }
+
+        const sent =
+          await handle.sock.sendMessage(
+            checked.jid,
+            { text },
+          )
+
+        const messageId =
+          sent?.key?.id
+
+        if (!messageId) {
+          throw new Error(
+            'O WhatsApp não retornou o ID da mensagem.'
+          )
+        }
+
+        // Dá tempo ao Baileys para processar eventos de credenciais
+        // antes da função serverless terminar.
+        await new Promise(
+          resolve => setTimeout(resolve, 900)
+        )
+
+        await handle.flush()
+
+        await pool.query(
+          'INSERT INTO baileys_sent_requests (session_id, request_id, message_id) VALUES ($1,$2,$3) ON CONFLICT (session_id, request_id) DO NOTHING',
+          [
+            sessionId,
+            body.requestId,
+            messageId,
+          ],
+        )
+
+        await upsertSession(
+          sessionId,
+          {
+            status: 'connected',
+            qrcode: null,
+            lastError: null,
+          },
+        )
+
+        console.info(
+          '[Baileys] message sent',
+          {
+            sessionId,
+            to,
+            messageId,
+          },
+        )
+
+        return {
+          id: messageId,
+        }
+      } finally {
+        try {
+          await handle.flush()
+        } catch {}
+
+        handle.close()
+      }
+    })
   }
+
   const error = new Error('Ação inválida.')
   error.status = 404
   throw error
