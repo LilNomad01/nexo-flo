@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}WhatsApp por QR Code • Nexo Flow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Modo manual</p>
+    <h1>Entrar no WhatsApp com QR Code</h1>
+    <p class="muted">O Nexo Flow abre o WhatsApp Web em uma nova guia para você escanear o QR com o celular.</p>
+  </div>
+  <a class="secondary" href="/whatsapp">Voltar</a>
+</div>
+
+<div class="card qr-panel">
+  <div class="qr-illustration">▦</div>
+  <div>
+    <h2>Como conectar</h2>
+    <ol>
+      <li>No celular, abra o WhatsApp.</li>
+      <li>Entre em <strong>Dispositivos conectados</strong>.</li>
+      <li>Toque em <strong>Conectar um dispositivo</strong>.</li>
+      <li>Clique no botão abaixo e escaneie o QR exibido pelo WhatsApp Web.</li>
+    </ol>
+    <button class="primary" type="button" onclick="openWhatsAppWeb()">Abrir QR Code do WhatsApp</button>
+    <p class="muted qr-note">O login por QR é uma sessão do WhatsApp Web. Por segurança e compatibilidade com as regras da plataforma, as campanhas automáticas do Nexo Flow continuam usando a Cloud API oficial.</p>
+  </div>
+</div>
+
+<script>
+async function openWhatsAppWeb() {
+  window.open('https://web.whatsapp.com/', '_blank', 'noopener,noreferrer');
+}
+</script>
+{% endblock %}

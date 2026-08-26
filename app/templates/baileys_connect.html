@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Conectar Baileys • Nexo Flow{% endblock %}
+{% block content %}
+{% set status_labels = {'connected': 'Conectado', 'connecting': 'Conectando', 'disconnected': 'Desconectado', 'pending': 'Pendente'} %}
+{% set has_qr = connection and (connection.qrcode_svg or connection.qrcode) and not connection.connected %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Baileys • API não oficial</p>
+    <h1>{{ number.display_name }}</h1>
+    <p class="muted">Session ID: <code>{{ number.phone_number_id }}</code></p>
+  </div>
+  <a class="secondary" href="/whatsapp">Voltar aos canais</a>
+</div>
+
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if created %}<div class="alert success">Sessão Baileys adicionada ao Nexo Flow.</div>{% endif %}
+{% if connection_started %}<div class="alert success">Conexão iniciada. A tela será atualizada automaticamente.</div>{% endif %}
+
+<div class="split-layout">
+  <section class="card">
+    <h2>Status da sessão</h2>
+    <div id="connection-hero" class="connection-hero {{ 'connected' if connection and connection.connected else 'unknown' }}"><i></i><span>{{ 'Conectado ao WhatsApp' if connection and connection.connected else 'Aguardando conexão' }}</span></div>
+    <div class="session-metrics">
+      <p><span>Status:</span><strong id="connection-status">{{ status_labels.get(connection.status if connection else number.status, 'Aguardando') }}</strong></p>
+      <p><span>Telefone:</span><strong id="connection-phone">{{ number.phone_e164 or 'Pendente' }}</strong></p>
+    </div>
+    <div id="connected-panel" class="alert success"{% if not connection or not connection.connected %} hidden{% endif %}><strong>Baileys conectado.</strong> Este canal já pode ser usado nas campanhas.</div>
+    <div id="qr-panel" class="qr-panel"{% if not has_qr %} hidden{% endif %}>
+      <div id="qr-render" class="qr-render" aria-label="QR Code de conexão Baileys">
+        {% if connection and connection.qrcode_svg %}
+          {{ connection.qrcode_svg | safe }}
+        {% elif connection and connection.qrcode %}
+          <img src="{{ connection.qrcode }}" alt="QR Code de conexão Baileys">
+        {% endif %}
+      </div>
+      <p>Abra o WhatsApp no celular, entre em <strong>Aparelhos conectados</strong> e escaneie o QR.</p>
+    </div>
+    <div id="no-qr" class="empty small"{% if connection and (connection.connected or connection.qrcode_svg or connection.qrcode) %} hidden{% endif %}><h3>Preparando conexão</h3><p>O QR aparecerá aqui automaticamente.</p></div>
+    <p id="connection-error" class="muted">{{ connection.last_error if connection and connection.last_error else 'O status é consultado automaticamente.' }}</p>
+    <a class="secondary" href="/whatsapp/baileys/{{ number.id }}">Atualizar status</a>
+  </section>
+
+  <section class="card">
+    <h2>Gerar nova conexão</h2>
+    <p class="muted">Use este botão quando o QR expirar ou a sessão for desconectada.</p>
+    <form method="post" action="/whatsapp/baileys/{{ number.id }}/connect" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="primary" type="submit">Gerar novo QR Baileys</button>
+    </form>
+    <div class="alert warning">A sessão fica cifrada no PostgreSQL e é reaberta pela Vercel quando necessário.</div>
+  </section>
+</div>
+
+{% if not connection or not connection.connected %}
+<script>
+(() => {
+  const statusUrl = {{ ('/api/whatsapp/baileys/' ~ number.id ~ '/status')|tojson }};
+  const hero = document.getElementById('connection-hero');
+  const heroText = hero.querySelector('span');
+  const statusText = document.getElementById('connection-status');
+  const phoneText = document.getElementById('connection-phone');
+  const connectedPanel = document.getElementById('connected-panel');
+  const qrPanel = document.getElementById('qr-panel');
+  const qrRender = document.getElementById('qr-render');
+  const noQr = document.getElementById('no-qr');
+  const errorText = document.getElementById('connection-error');
+  const statusLabels = {connected: 'Conectado', connecting: 'Conectando', disconnected: 'Desconectado', pending: 'Pendente'};
+  let attempts = 0;
+  let lastQrKey = '';
+
+  function clearQr() {
+    qrRender.replaceChildren();
+    lastQrKey = '';
+  }
+
+  function renderQr(data) {
+    if (data.qrcode_svg) {
+      const key = `svg:${data.qrcode_svg.length}:${data.qrcode_svg.slice(-48)}`;
+      if (key !== lastQrKey) {
+        qrRender.innerHTML = data.qrcode_svg;
+        lastQrKey = key;
+      }
+      return true;
+    }
+    if (data.qrcode) {
+      const key = `img:${data.qrcode.length}:${data.qrcode.slice(-48)}`;
+      if (key !== lastQrKey) {
+        const image = document.createElement('img');
+        image.alt = 'QR Code de conexão Baileys';
+        image.decoding = 'sync';
+        image.src = data.qrcode;
+        qrRender.replaceChildren(image);
+        lastQrKey = key;
+      }
+      return true;
+    }
+    clearQr();
+    return false;
+  }
+
+  async function poll() {
+    attempts += 1;
+    try {
+      const response = await fetch(statusUrl, {headers: {'Accept': 'application/json'}, cache: 'no-store'});
+      if (!response.ok) {
+        let detail = 'Gateway indisponível';
+        try {
+          const payload = await response.json();
+          detail = payload.detail || payload.error || detail;
+        } catch (_) {}
+        throw new Error(detail);
+      }
+      const data = await response.json();
+      const status = data.status || 'connecting';
+      statusText.textContent = statusLabels[status] || 'Aguardando';
+      phoneText.textContent = data.phone || 'Pendente';
+      errorText.textContent = data.last_error || (status === 'connecting' ? 'Aguardando o pareamento pelo WhatsApp.' : 'Gere uma nova conexão para exibir o QR.');
+      if (data.connected) {
+        hero.classList.add('connected');
+        heroText.textContent = 'Conectado ao WhatsApp';
+        connectedPanel.hidden = false;
+        qrPanel.hidden = true;
+        clearQr();
+        noQr.hidden = true;
+        return;
+      }
+      hero.classList.remove('connected');
+      heroText.textContent = status === 'connecting' ? 'Aguardando conexão' : 'WhatsApp desconectado';
+      connectedPanel.hidden = true;
+      if (renderQr(data)) {
+        qrPanel.hidden = false;
+        noQr.hidden = true;
+      } else {
+        qrPanel.hidden = true;
+        noQr.hidden = false;
+        if (status === 'disconnected') return;
+      }
+    } catch (error) {
+      errorText.textContent = error.message || 'Não foi possível consultar o status do Baileys.';
+    }
+    if (attempts < 96) window.setTimeout(poll, 2500);
+  }
+  window.setTimeout(poll, 700);
+})();
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Logs • Nexo Flow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Monitoramento</p>
+    <h1>Logs em tempo real</h1>
+    <p class="muted">Acompanhe fila, tentativas, mensagens enviadas, entregas, webhooks e erros. A tela atualiza automaticamente.</p>
+  </div>
+  <div class="live-indicator"><span></span><strong id="live-label">Ao vivo</strong></div>
+</div>
+
+<div class="metric-grid compact log-metrics">
+  <article class="metric"><span>Eventos (24h)</span><strong>{{ counts.total }}</strong></article>
+  <article class="metric"><span>Sucessos</span><strong>{{ counts.success }}</strong></article>
+  <article class="metric"><span>Avisos</span><strong>{{ counts.warning }}</strong></article>
+  <article class="metric"><span>Erros</span><strong>{{ counts.error }}</strong></article>
+</div>
+
+<section class="card log-toolbar">
+  <form method="get" action="/logs" class="filter-row">
+    <label>Nível
+      <select name="level">
+        <option value="">Todos</option>
+        {% for value, label in [('success','Sucesso'),('info','Informação'),('warning','Aviso'),('error','Erro'),('debug','Debug')] %}
+        <option value="{{ value }}" {{ 'selected' if level == value else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Categoria
+      <select name="category">
+        <option value="">Todas</option>
+        {% for value, label in [('dispatch','Disparos'),('delivery','Entregas'),('webhook','Webhooks/SSE'),('connection','Conexões'),('campaign','Campanhas'),('contacts','Contatos'),('system','Sistema')] %}
+        <option value="{{ value }}" {{ 'selected' if category == value else '' }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Provedor
+      <select name="provider">
+        <option value="">Todos</option>
+        <option value="meta_cloud" {{ 'selected' if provider == 'meta_cloud' else '' }}>Meta oficial</option>
+        <option value="uazapi" {{ 'selected' if provider == 'uazapi' else '' }}>UAZAPI</option>
+        <option value="baileys" {{ 'selected' if provider == 'baileys' else '' }}>Baileys</option>
+      </select>
+    </label>
+    <button class="primary" type="submit">Aplicar filtros</button>
+    <button class="secondary" type="button" id="refresh-logs">Atualizar agora</button>
+  </form>
+</section>
+
+<section class="card log-card">
+  <div class="table-wrap">
+    <table class="log-table">
+      <thead><tr><th>Horário</th><th>Nível</th><th>Categoria</th><th>Provedor</th><th>Evento</th><th>Mensagem</th><th>Detalhes</th></tr></thead>
+      <tbody id="log-rows">
+      {% for entry in entries %}
+        <tr>
+          <td class="log-time">{{ entry.created_at.strftime('%d/%m/%Y %H:%M:%S') }}</td>
+          <td><span class="log-level {{ entry.level }}">{{ entry.level }}</span></td>
+          <td>{{ entry.category }}</td>
+          <td>{{ entry.provider or '—' }}</td>
+          <td><code>{{ entry.event }}</code></td>
+          <td>{{ entry.message }}</td>
+          <td>{% if entry.details_json and entry.details_json != '{}' %}<details><summary>Ver</summary><pre>{{ entry.details_json }}</pre></details>{% else %}—{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7"><div class="empty small"><h3>Nenhum log encontrado</h3><p>Inicie uma campanha ou conecte um provedor para acompanhar os eventos.</p></div></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+(() => {
+  const rows = document.getElementById('log-rows');
+  const label = document.getElementById('live-label');
+  const filters = new URLSearchParams(window.location.search);
+  filters.set('limit', '250');
+
+  function cell(text, className) {
+    const td = document.createElement('td');
+    td.textContent = text == null || text === '' ? '—' : String(text);
+    if (className) td.className = className;
+    return td;
+  }
+
+  function render(items) {
+    rows.replaceChildren();
+    if (!items.length) {
+      const tr = document.createElement('tr');
+      const td = cell('Nenhum log encontrado.');
+      td.colSpan = 7;
+      tr.appendChild(td);
+      rows.appendChild(tr);
+      return;
+    }
+    for (const item of items) {
+      const tr = document.createElement('tr');
+      tr.appendChild(cell(item.created_label, 'log-time'));
+      const levelTd = document.createElement('td');
+      const badge = document.createElement('span');
+      badge.className = `log-level ${item.level}`;
+      badge.textContent = item.level;
+      levelTd.appendChild(badge);
+      tr.appendChild(levelTd);
+      tr.appendChild(cell(item.category));
+      tr.appendChild(cell(item.provider));
+      const eventTd = document.createElement('td');
+      const code = document.createElement('code');
+      code.textContent = item.event;
+      eventTd.appendChild(code);
+      tr.appendChild(eventTd);
+      tr.appendChild(cell(item.message));
+      const detailTd = document.createElement('td');
+      if (item.details && Object.keys(item.details).length) {
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        const pre = document.createElement('pre');
+        summary.textContent = 'Ver';
+        pre.textContent = JSON.stringify(item.details, null, 2);
+        details.append(summary, pre);
+        detailTd.appendChild(details);
+      } else detailTd.textContent = '—';
+      tr.appendChild(detailTd);
+      rows.appendChild(tr);
+    }
+  }
+
+  async function refresh() {
+    try {
+      const response = await fetch(`/api/logs?${filters.toString()}`, {headers: {'Accept': 'application/json'}});
+      if (!response.ok) throw new Error('Falha ao atualizar');
+      const payload = await response.json();
+      render(payload.items || []);
+      label.textContent = `Ao vivo • ${new Date().toLocaleTimeString('pt-BR')}`;
+    } catch (_) {
+      label.textContent = 'Reconectando…';
+    }
+  }
+
+  document.getElementById('refresh-logs').addEventListener('click', refresh);
+  setInterval(refresh, 2500);
+})();
+</script>
+{% endblock %}

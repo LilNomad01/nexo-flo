@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Números WhatsApp • Nexo Flow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Conexão WhatsApp</p>
+    <h1>API oficial e integrações Web</h1>
+    <p class="muted">Conecte a Meta Cloud API, uma instância UAZAPI ou um gateway Baileys com QR Code.</p>
+  </div>
+  <a class="secondary" href="/whatsapp/webhooks">Diagnóstico de webhooks</a>
+</div>
+
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if sync_errors %}<div class="alert warning">Não foi possível atualizar {{ sync_errors|length }} instância(s) agora. O último estado conhecido foi mantido.</div>{% endif %}
+{% if request.query_params.get('success') == 'meta' %}<div class="alert success">Canal oficial validado e conectado.</div>{% endif %}
+
+<div class="connection-options">
+  <article class="card connection-option featured">
+    <p class="eyebrow">API oficial</p>
+    <h2>Meta Cloud API</h2>
+    <p>Integração oficial da WhatsApp Business Platform por WABA ID, Phone Number ID e access token.</p>
+    <span class="connection-state {{ 'connected' if connected_meta else 'unknown' }}"><i></i>{{ connected_meta }} conectado(s)</span>
+  </article>
+  <article class="card connection-option">
+    <p class="eyebrow">Biblioteca não oficial</p>
+    <h2>Baileys</h2>
+    <p>Conecta o Nexo Flow a um gateway persistente baseado no projeto WhiskeySockets/Baileys.</p>
+    <span class="connection-state {{ 'connected' if connected_baileys else 'unknown' }}"><i></i>{{ connected_baileys }} conectado(s)</span>
+  </article>
+  <article class="card connection-option">
+    <p class="eyebrow">API não oficial</p>
+    <h2>UAZAPI</h2>
+    <p>Cria uma instância no servidor <code>{{ settings.uazapi_server_url }}</code> e conecta o WhatsApp por QR ou código.</p>
+    <span class="connection-state {{ 'connected' if connected_uazapi else 'unknown' }}"><i></i>{{ connected_uazapi }} conectado(s)</span>
+  </article>
+  <article class="card connection-option">
+    <p class="eyebrow">Uso manual</p>
+    <h2>WhatsApp Web</h2>
+    <p>Abre o WhatsApp Web sem integrar campanhas ou conversas ao Nexo Flow.</p>
+    <a class="secondary" href="/whatsapp/qr">Abrir WhatsApp Web</a>
+  </article>
+</div>
+
+<section class="card baileys-setup">
+  <p class="eyebrow">Baileys • não oficial</p>
+  <h2>Conectar Baileys na Vercel</h2>
+  <p class="muted">O Nexo Flow gera o QR pela própria Vercel e persiste as chaves da sessão cifradas no PostgreSQL. Não é necessário manter o terminal ligado.</p>
+  <form method="post" action="/whatsapp/connect/baileys" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Nome do canal<input name="display_name" required maxlength="120" placeholder="Ex.: Baileys Comercial"></label>
+    <button class="primary" type="submit">Criar sessão na Vercel e gerar QR</button>
+  </form>
+  <div class="alert warning"><strong>Atenção:</strong> Baileys não é uma API oficial do WhatsApp. A conexão é reaberta sob demanda para QR, validação e envio.</div>
+</section>
+
+<div class="split-layout">
+  <section class="card">
+    <p class="eyebrow">Oficial</p>
+    <h2>Conectar Meta Cloud API</h2>
+    <form method="post" action="/whatsapp/connect" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>WhatsApp Business Account ID<input name="waba_id" required autocomplete="off"></label>
+      <label>Phone Number ID<input name="phone_number_id" required autocomplete="off"></label>
+      <label>Access token
+        <input name="access_token" type="password" autocomplete="new-password" placeholder="Deixe vazio para usar WHATSAPP_ACCESS_TOKEN">
+        <small>Se informado aqui, o token fica cifrado no banco da aplicação.</small>
+      </label>
+      <button class="primary" type="submit">Validar com a Meta</button>
+    </form>
+
+    <details class="help-details">
+      <summary>Onde encontro os dados oficiais?</summary>
+      <ol>
+        <li>Abra o Meta for Developers e selecione seu aplicativo.</li>
+        <li>Entre em <strong>WhatsApp → API Setup</strong>.</li>
+        <li>Copie o access token, o Phone Number ID e o WhatsApp Business Account ID.</li>
+        <li>Em produção, prefira um token de System User com as permissões necessárias.</li>
+      </ol>
+    </details>
+  </section>
+
+  <section class="card">
+    <p class="eyebrow">Não oficial</p>
+    <h2>Criar instância UAZAPI</h2>
+    <form method="post" action="/whatsapp/connect/uazapi" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Nome da instância<input name="instance_name" required maxlength="120" placeholder="Ex.: Nexo Flow Comercial"></label>
+      <label>Admin Token
+        <input name="admin_token" type="password" required autocomplete="new-password">
+        <small>Usado uma única vez para criar a instância; não é salvo. O token retornado da instância é cifrado no banco.</small>
+      </label>
+      <label>Telefone para código de pareamento (opcional)
+        <input name="phone" inputmode="tel" placeholder="5511999999999">
+        <small>Deixe vazio para gerar QR Code.</small>
+      </label>
+      <button class="primary" type="submit">Criar e conectar UAZAPI</button>
+    </form>
+    <div class="alert warning"><strong>Atenção:</strong> a UAZAPI é uma integração não oficial. O uso pode sofrer desconexões ou restrições do WhatsApp.</div>
+  </section>
+</div>
+
+<section class="card">
+  <h2>Canais conectados</h2>
+  {% if numbers %}
+  <div class="channel-grid">
+    {% for number in numbers %}
+    <article class="channel">
+      <div class="channel-mark">◉</div>
+      <div><h3>{{ number.display_name }}</h3><p>{{ number.phone_e164 or 'Telefone pendente' }}</p></div>
+      <span class="connection-state {{ 'connected' if number.status == 'connected' else 'unknown' }}"><i></i>{{ {'connected':'Conectado','connecting':'Conectando','disconnected':'Desconectado','hibernated':'Hibernando'}.get(number.status, number.status) }}</span>
+      <dl>
+        <div><dt>Provedor</dt><dd>{{ number.provider_label }}</dd></div>
+        <div><dt>{{ 'Phone Number ID' if number.provider == 'meta_cloud' else 'Session/Instance ID' }}</dt><dd>{{ number.phone_number_id }}</dd></div>
+        {% if number.provider == 'meta_cloud' %}
+        <div><dt>WABA</dt><dd>{{ number.waba_id }}</dd></div>
+        <div><dt>Qualidade Meta</dt><dd>{{ number.quality_rating or 'Não informada' }}</dd></div>
+        {% elif number.provider == 'uazapi' %}
+        <div><dt>Conexão</dt><dd><a href="/whatsapp/uazapi/{{ number.id }}">Ver QR/status</a></dd></div>
+        {% else %}
+        <div><dt>Execução</dt><dd>{{ 'Vercel gerenciada' if number.waba_id == 'vercel-internal' else number.waba_id }}</dd></div>
+        <div><dt>Conexão</dt><dd><a href="/whatsapp/baileys/{{ number.id }}">Ver QR/status</a></dd></div>
+        {% endif %}
+      </dl>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty"><div class="empty-icon">◉</div><h3>Nenhum canal conectado</h3><p>Escolha Meta Cloud API, UAZAPI ou Baileys para habilitar campanhas.</p></div>
+  {% endif %}
+</section>
+{% endblock %}

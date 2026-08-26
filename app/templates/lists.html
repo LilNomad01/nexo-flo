@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}Listas • Nexo Flow{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Listas</h1><p class="muted">Organize contatos reais para segmentar campanhas.</p></div></div>
+{% if request.query_params.get('success') %}<div class="alert success">Lista criada.</div>{% elif request.query_params.get('error') %}<div class="alert error">Já existe uma lista com esse nome.</div>{% endif %}
+<div class="split-layout"><section class="card"><h2>Nova lista</h2><form method="post" action="/lists" class="stack"><input type="hidden" name="csrf" value="{{ csrf }}"><label>Nome<input name="name" required></label><label>Descrição<textarea name="description" rows="3"></textarea></label><label>Contatos<select name="contact_ids" multiple size="7">{% for contact in contacts %}<option value="{{ contact.id }}">{{ contact.name }} • {{ contact.phone_e164 }}</option>{% endfor %}</select><small>Use Ctrl/Cmd para selecionar vários.</small></label><button class="primary" type="submit">Criar lista</button></form></section><section class="card grow"><h2>Listas do workspace</h2>{% if rows %}<div class="list-cards">{% for item, count in rows %}<article><div class="list-icon">≡</div><h3>{{ item.name }}</h3><p>{{ item.description or 'Sem descrição' }}</p><strong>{{ count }} contato(s)</strong></article>{% endfor %}</div>{% else %}<div class="empty"><div class="empty-icon">≡</div><h3>Nenhuma lista criada</h3><p>Crie uma lista depois de cadastrar seus contatos.</p></div>{% endif %}</section></div>
+{% endblock %}

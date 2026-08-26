@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Visão geral • Nexo Flow{% endblock %}
+{% block content %}
+<div class="page-head"><div><p class="eyebrow">Operação real</p><h1>Visão geral</h1><p class="muted">Dados do seu workspace, sem seed e sem simulação.</p></div><a class="primary" href="/campaigns/new">Nova campanha</a></div>
+{% if metrics.numbers == 0 %}<div class="alert info"><strong>Nenhum número conectado.</strong> Configure as credenciais no servidor e valide seu Phone Number ID para habilitar envios. <a href="/whatsapp">Conectar WhatsApp</a></div>{% endif %}
+<div class="metric-grid">
+  <article class="metric"><span>Contatos</span><strong>{{ metrics.contacts }}</strong></article>
+  <article class="metric"><span>Campanhas</span><strong>{{ metrics.campaigns }}</strong></article>
+  <article class="metric"><span>Enviadas</span><strong>{{ metrics.sent }}</strong></article>
+  <article class="metric"><span>Entregues</span><strong>{{ metrics.delivered }}</strong></article>
+  <article class="metric"><span>Lidas</span><strong>{{ metrics.read }}</strong></article>
+  <article class="metric"><span>Respostas</span><strong>{{ metrics.replied }}</strong></article>
+  <article class="metric"><span>Falhas</span><strong>{{ metrics.failed }}</strong></article>
+  <article class="metric"><span>Números</span><strong>{{ metrics.numbers }}</strong></article>
+</div>
+<section class="card"><div class="card-head"><div><h2>Campanhas recentes</h2><p class="muted">A fila é processada pelo worker Python.</p></div><a href="/campaigns">Ver todas</a></div>
+{% if campaigns %}<div class="table-wrap"><table><thead><tr><th>Campanha</th><th>Status</th><th>Ritmo</th><th>Criada em</th></tr></thead><tbody>{% for campaign in campaigns %}<tr><td><a href="/campaigns/{{ campaign.id }}"><strong>{{ campaign.name }}</strong></a></td><td><span class="status {{ campaign.status }}">{{ campaign.status }}</span></td><td>{{ campaign.processing_rate }}/min</td><td>{{ campaign.created_at.strftime('%d/%m/%Y') }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty"><div class="empty-icon">↗</div><h3>Nenhuma campanha criada</h3><p>Conecte um número, cadastre contatos e crie sua primeira campanha.</p></div>{% endif %}</section>
+{% endblock %}

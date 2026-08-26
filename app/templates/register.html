@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Criar conta • Nexo Flow{% endblock %}
+{% block auth_content %}
+<section class="auth-card wide">
+  <div class="auth-brand"><span class="brandmark">N</span><h1>Nexo Flow</h1></div>
+  <p class="eyebrow">Configuração inicial</p><h2>Crie sua organização</h2>
+  <p class="muted">O workspace começa vazio e isolado. Depois, você conecta seu canal pela Meta oficial ou pela UAZAPI não oficial.</p>
+  {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+  <form method="post" action="/register" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="form-grid"><label>Organização<input name="workspace_name" required minlength="2"></label><label>Seu nome<input name="name" required minlength="2"></label></div>
+    <label>E-mail<input type="email" name="email" required autocomplete="email"></label>
+    <label>Senha<input type="password" name="password" required minlength="10" autocomplete="new-password"><small>Mínimo de 10 caracteres.</small></label>
+    <button class="primary full" type="submit">Criar workspace</button>
+  </form>
+  <p class="auth-link">Já possui conta? <a href="/login">Entrar</a></p>
+</section>
+{% endblock %}

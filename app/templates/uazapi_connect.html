@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Conectar UAZAPI • Nexo Flow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">UAZAPI • API não oficial</p>
+    <h1>{{ number.display_name }}</h1>
+    <p class="muted">Instance ID: <code>{{ number.phone_number_id }}</code></p>
+  </div>
+  <a class="secondary" href="/whatsapp">Voltar aos canais</a>
+</div>
+
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if created or request.query_params.get('created') %}<div class="alert success">Instância criada e adicionada ao Nexo Flow.</div>{% endif %}
+{% if request.query_params.get('connection_error') %}<div class="alert warning">A instância foi criada, mas a primeira tentativa de conexão falhou. Tente gerar o QR/código novamente.</div>{% endif %}
+{% if connection_started or request.query_params.get('connecting') %}<div class="alert success">Nova tentativa de conexão iniciada. A tela será atualizada automaticamente.</div>{% endif %}
+
+<div class="split-layout">
+  <section class="card">
+    <h2>Status da instância</h2>
+    <div id="connection-hero" class="connection-hero {{ 'connected' if connection and connection.connected else 'unknown' }}"><i></i><span>{{ 'Conectado ao WhatsApp' if connection and connection.connected else 'Aguardando conexão' }}</span></div>
+    <div class="metrics compact">
+      <article><span>Status</span><strong id="connection-status">{{ connection.status if connection else number.status }}</strong></article>
+      <article><span>Telefone</span><strong id="connection-phone">{{ number.phone_e164 or 'Pendente' }}</strong></article>
+    </div>
+    <div id="connected-panel" class="alert success"{% if not connection or not connection.connected %} hidden{% endif %}><strong>WhatsApp conectado.</strong> Este canal já pode ser selecionado nas campanhas.</div>
+    <div id="qr-panel" class="qr-panel"{% if not connection or not connection.qrcode or connection.connected %} hidden{% endif %}>
+      <img id="qr-image" src="{{ connection.qrcode if connection and connection.qrcode else '' }}" alt="QR Code de conexão UAZAPI">
+      <p>Abra o WhatsApp no celular, entre em <strong>Aparelhos conectados</strong> e escaneie o QR.</p>
+    </div>
+    <div id="pair-panel" class="pair-code"{% if not connection or not connection.paircode or connection.connected %} hidden{% endif %}><span>Código de pareamento</span><strong id="pair-code">{{ connection.paircode if connection and connection.paircode else '' }}</strong></div>
+    <div id="no-qr" class="empty small"{% if connection and (connection.connected or connection.qrcode or connection.paircode) %} hidden{% endif %}><h3>Preparando conexão</h3><p>O QR ou código aparecerá aqui automaticamente.</p></div>
+    <p class="muted">Esta tela consulta a UAZAPI automaticamente até confirmar a conexão.</p>
+    <a class="secondary" href="/whatsapp/uazapi/{{ number.id }}">Atualizar status</a>
+  </section>
+
+  <section class="card">
+    <h2>Gerar nova conexão</h2>
+    <form method="post" action="/whatsapp/uazapi/{{ number.id }}/connect" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Telefone para código de pareamento (opcional)
+        <input name="phone" inputmode="tel" placeholder="5511999999999">
+        <small>Deixe vazio para gerar QR Code.</small>
+      </label>
+      <button class="primary" type="submit">Gerar QR/código</button>
+    </form>
+    <div class="alert warning">A UAZAPI não é uma API oficial da Meta. Use por sua conta e monitore a estabilidade da sessão.</div>
+  </section>
+</div>
+{% if not connection or not connection.connected %}
+<script>
+(() => {
+  const statusUrl = {{ ('/api/whatsapp/uazapi/' ~ number.id ~ '/status')|tojson }};
+  const hero = document.getElementById('connection-hero');
+  const heroText = hero.querySelector('span');
+  const statusText = document.getElementById('connection-status');
+  const phoneText = document.getElementById('connection-phone');
+  const connectedPanel = document.getElementById('connected-panel');
+  const qrPanel = document.getElementById('qr-panel');
+  const qrImage = document.getElementById('qr-image');
+  const pairPanel = document.getElementById('pair-panel');
+  const pairCode = document.getElementById('pair-code');
+  const noQr = document.getElementById('no-qr');
+  let attempts = 0;
+
+  const poll = async () => {
+    attempts += 1;
+    try {
+      const response = await fetch(statusUrl, {headers: {'Accept': 'application/json'}, cache: 'no-store'});
+      if (!response.ok) throw new Error('status indisponível');
+      const data = await response.json();
+      statusText.textContent = data.status || 'connecting';
+      if (data.phone) phoneText.textContent = data.phone;
+      if (data.connected) {
+        hero.classList.add('connected');
+        heroText.textContent = 'Conectado ao WhatsApp';
+        connectedPanel.hidden = false;
+        qrPanel.hidden = true;
+        pairPanel.hidden = true;
+        noQr.hidden = true;
+        return;
+      }
+      if (data.qrcode) {
+        qrImage.src = data.qrcode;
+        qrPanel.hidden = false;
+        pairPanel.hidden = true;
+        noQr.hidden = true;
+      } else if (data.paircode) {
+        pairCode.textContent = data.paircode;
+        pairPanel.hidden = false;
+        qrPanel.hidden = true;
+        noQr.hidden = true;
+      }
+    } catch (_) {
+      // A próxima consulta tenta novamente sem expor credenciais ou o conteúdo do QR.
+    }
+    if (attempts < 72) window.setTimeout(poll, 2500);
+  };
+  window.setTimeout(poll, 1200);
+})();
+</script>
+{% endif %}
+{% endblock %}

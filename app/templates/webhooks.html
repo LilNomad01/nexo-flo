@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Webhooks • Nexo Flow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Diagnóstico</p>
+    <h1>Webhooks e eventos</h1>
+    <p class="muted">Confira como cada provedor envia mensagens e atualizações ao Nexo Flow.</p>
+  </div>
+  <a class="secondary" href="/whatsapp">Voltar aos canais</a>
+</div>
+
+{% if request.query_params.get('success') == 'uazapi' %}<div class="alert success">Webhook UAZAPI configurado com sucesso.</div>{% endif %}
+{% if request.query_params.get('error') == 'public_url' %}<div class="alert error">Configure uma PUBLIC_BASE_URL HTTPS antes de registrar um webhook externo.</div>{% endif %}
+{% if request.query_params.get('error') == 'uazapi' %}<div class="alert error">A UAZAPI recusou a configuração. Consulte a tela de Logs para ver o erro.</div>{% endif %}
+
+<div class="split-layout webhook-layout">
+  <section class="card">
+    <p class="eyebrow">API oficial</p>
+    <h2>Webhook Meta</h2>
+    <dl class="diagnostic-list">
+      <div><dt>URL pública HTTPS</dt><dd><span class="status {{ 'connected' if public_https else 'failed' }}">{{ 'OK' if public_https else 'Pendente' }}</span></dd></div>
+      <div><dt>Verify Token</dt><dd><span class="status {{ 'connected' if settings.whatsapp_verify_token else 'failed' }}">{{ 'Configurado' if settings.whatsapp_verify_token else 'Pendente' }}</span></dd></div>
+      <div><dt>App Secret</dt><dd><span class="status {{ 'connected' if settings.whatsapp_app_secret else 'failed' }}">{{ 'Configurado' if settings.whatsapp_app_secret else 'Pendente' }}</span></dd></div>
+    </dl>
+    <label>Callback da Meta<input readonly value="{{ meta_callback }}"></label>
+    <p class="muted">A Meta precisa alcançar esta URL pela internet e valida as notificações com o App Secret. Configure uma URL HTTPS pública estável nas variáveis da hospedagem.</p>
+    <div class="alert {{ 'success' if meta_ready else 'warning' }}">{{ 'Webhook oficial pronto para receber eventos.' if meta_ready else 'O webhook oficial ainda precisa dos três itens acima.' }}</div>
+  </section>
+
+  <section class="card">
+    <p class="eyebrow">API não oficial</p>
+    <h2>Eventos UAZAPI na web</h2>
+    <dl class="diagnostic-list">
+      <div><dt>Transporte hospedado</dt><dd><span class="status connected">Webhook HTTPS</span></dd></div>
+      <div><dt>Precisa de URL pública</dt><dd><strong>Sim</strong></dd></div>
+      <div><dt>Eventos</dt><dd>connection, messages, messages_update</dd></div>
+    </dl>
+    <p class="muted">Na versão web, a UAZAPI envia eventos para um endpoint HTTPS individual e protegido por segredo. Cada evento é persistido com deduplicação e registrado nos Logs.</p>
+    {% for number in numbers if number.provider == 'uazapi' %}
+    <article class="webhook-channel">
+      <div><strong>{{ number.display_name }}</strong><small>{{ number.phone_e164 or number.phone_number_id }}</small></div>
+      <span class="connection-state {{ 'connected' if number.status == 'connected' else 'unknown' }}"><i></i>{{ {'connected':'Conectado','connecting':'Conectando','disconnected':'Desconectado','hibernated':'Hibernando'}.get(number.status, number.status) }}</span>
+      {% if public_https %}
+      <form method="post" action="/whatsapp/uazapi/{{ number.id }}/webhook/configure">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="secondary" type="submit">Configurar webhook HTTPS</button>
+      </form>
+      {% endif %}
+    </article>
+    {% else %}
+    <div class="empty small"><h3>Nenhuma instância UAZAPI</h3><p>Crie uma instância para iniciar o receptor de eventos.</p></div>
+    {% endfor %}
+  </section>
+
+  <section class="card">
+    <p class="eyebrow">Baileys</p>
+    <h2>Eventos do gateway</h2>
+    <dl class="diagnostic-list">
+      <div><dt>Transporte</dt><dd><span class="status connected">Webhook HTTPS</span></dd></div>
+      <div><dt>Autenticação</dt><dd>Segredo por canal</dd></div>
+      <div><dt>Eventos</dt><dd>connection, message</dd></div>
+    </dl>
+    <p class="muted">O gateway Baileys envia eventos normalizados e autenticados automaticamente ao criar a sessão.</p>
+    {% for number in numbers if number.provider == 'baileys' %}
+    <article class="webhook-channel">
+      <div><strong>{{ number.display_name }}</strong><small>{{ number.phone_e164 or number.phone_number_id }}</small></div>
+      <span class="connection-state {{ 'connected' if number.status == 'connected' else 'unknown' }}"><i></i>{{ {'connected':'Conectado','connecting':'Conectando','disconnected':'Desconectado'}.get(number.status, number.status) }}</span>
+      <a class="secondary" href="/whatsapp/baileys/{{ number.id }}">Ver sessão</a>
+    </article>
+    {% else %}
+    <div class="empty small"><h3>Nenhuma sessão Baileys</h3><p>Conecte um gateway para receber eventos.</p></div>
+    {% endfor %}
+  </section>
+</div>
+
+<section class="card">
+  <div class="card-head"><div><h2>Últimos eventos recebidos</h2><p class="muted">Eventos persistidos com proteção contra duplicidade.</p></div><a href="/logs?category=webhook">Abrir logs detalhados</a></div>
+  {% if recent_events %}
+  <div class="table-wrap"><table><thead><tr><th>Data</th><th>Provedor</th><th>Evento</th><th>ID externo</th></tr></thead><tbody>
+  {% for event in recent_events %}<tr><td>{{ event.created_at.strftime('%d/%m/%Y %H:%M:%S') }}</td><td>{{ event.provider }}</td><td>{{ event.event_type }}</td><td><code>{{ event.external_id }}</code></td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<div class="empty small"><h3>Nenhum evento recebido</h3><p>Os primeiros eventos aparecerão aqui quando o provedor enviar uma notificação.</p></div>{% endif %}
+</section>
+{% endblock %}

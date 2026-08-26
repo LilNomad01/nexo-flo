@@ -1,15 +1,17 @@
 {
-  "name": "nexo-flow-vercel-functions",
+  "name": "nexo-flow-baileys-gateway",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=20"
   },
+  "scripts": {
+    "start": "node src/server.js",
+    "check": "node --check src/server.js"
+  },
   "dependencies": {
-    "@vercel/functions": "3.4.3",
     "baileys": "7.0.0-rc14",
-    "pg": "8.16.3",
     "pino": "9.14.0"
   }
 }

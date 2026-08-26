@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Contatos • Nexo Flow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Contatos</h1>
+    <p class="muted">Importe sua base do Excel/CSV ou cadastre contatos manualmente. Campanhas só incluem contatos com opt-in registrado.</p>
+  </div>
+</div>
+
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if request.query_params.get('success') %}<div class="alert success">Contato criado com sucesso.</div>{% endif %}
+{% if request.query_params.get('imported') is not none %}
+<div class="alert success">
+  Importação concluída: <strong>{{ request.query_params.get('imported', '0') }}</strong> novo(s),
+  <strong>{{ request.query_params.get('updated', '0') }}</strong> atualizado(s),
+  <strong>{{ request.query_params.get('invalid', '0') }}</strong> inválido(s) e
+  <strong>{{ request.query_params.get('opted_in', '0') }}</strong> com opt-in registrado.
+</div>
+{% endif %}
+
+<section class="card import-card">
+  <div class="card-head">
+    <div>
+      <p class="eyebrow">Excel / CSV</p>
+      <h2>Importar números</h2>
+      <p class="muted">Aceita até 5.000 linhas por arquivo. No CSV, separe as colunas com ponto e vírgula (<code>;</code>). A importação já cria ou atualiza uma lista para usar em Campanhas.</p>
+      <a class="secondary" href="/contacts/template.csv">Baixar modelo CSV com ;</a>
+    </div>
+  </div>
+  <form method="post" action="/contacts/import" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="form-grid">
+      <label>Planilha
+        <input type="file" name="spreadsheet" accept=".xlsx,.csv" required>
+        <small>Colunas reconhecidas: <code>nome;telefone;email;empresa;opt_in</code>.</small>
+      </label>
+      <label>Nome da lista
+        <input name="list_name" required maxlength="120" placeholder="Ex.: Leads Agosto">
+        <small>Se a lista já existir, os contatos serão adicionados nela sem duplicar telefone.</small>
+      </label>
+    </div>
+    <label class="check">
+      <input type="checkbox" name="all_have_opt_in">
+      <span>Confirmo que todos os números desta planilha autorizaram receber mensagens no WhatsApp.</span>
+    </label>
+    <small class="muted">Se você não marcar essa opção, somente linhas com <code>opt_in = sim/true/1</code> serão elegíveis para campanha.</small>
+    <button class="primary" type="submit">Importar planilha</button>
+  </form>
+</section>
+
+<div class="split-layout">
+  <section class="card">
+    <h2>Adicionar contato</h2>
+    <form method="post" action="/contacts" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Nome<input name="name" required></label>
+      <label>Telefone<input name="phone" required placeholder="+55 11 99999-9999"></label>
+      <div class="form-grid">
+        <label>E-mail<input type="email" name="email"></label>
+        <label>Empresa<input name="company"></label>
+      </div>
+      <label>Origem
+        <select name="source">
+          <option>Manual</option><option>Website</option><option>Formulário</option><option>CRM</option><option>API</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" name="opt_in"><span>Tenho registro de opt-in para WhatsApp</span></label>
+      <button class="primary" type="submit">Salvar contato</button>
+    </form>
+  </section>
+
+  <section class="card grow">
+    <div class="card-head"><div><h2>Base de contatos</h2><p class="muted">{{ contacts|length }} contato(s)</p></div></div>
+    {% if contacts %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Contato</th><th>Telefone</th><th>Origem</th><th>Consentimento</th></tr></thead>
+        <tbody>
+        {% for contact in contacts %}
+          <tr>
+            <td><strong>{{ contact.name }}</strong><small>{{ contact.email or '' }}</small></td>
+            <td>{{ contact.phone_e164 }}</td>
+            <td>{{ contact.source }}</td>
+            <td><span class="status {{ contact.consent.status if contact.consent else 'unknown' }}">{{ contact.consent.status if contact.consent else 'unknown' }}</span></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty"><div class="empty-icon">☷</div><h3>Nenhum contato cadastrado</h3><p>Importe sua planilha ou adicione um contato manualmente.</p></div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

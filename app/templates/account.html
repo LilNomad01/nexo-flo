@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Minha conta • Nexo Flow{% endblock %}
+{% block content %}
+<div class="page-head"><div><p class="eyebrow">Segurança</p><h1>Minha conta</h1><p class="muted">{{ auth[0].name }} • {{ auth[0].email }}</p></div><a class="secondary" href="/dashboard">Voltar</a></div>
+{% if success == 'password' %}<div class="alert success">Senha alterada com sucesso.</div>{% endif %}
+{% if error == 'current' %}<div class="alert error">A senha atual não confere.</div>{% elif error == 'new' %}<div class="alert error">A nova senha deve ter ao menos 10 caracteres e coincidir com a confirmação.</div>{% endif %}
+<section class="card" style="max-width:620px"><h2>Alterar senha</h2><form method="post" action="/account/password" class="stack"><input type="hidden" name="csrf" value="{{ csrf }}"><label>Senha atual<input type="password" name="current_password" required autocomplete="current-password"></label><label>Nova senha<input type="password" name="new_password" required minlength="10" autocomplete="new-password"></label><label>Confirmar nova senha<input type="password" name="password_confirmation" required minlength="10" autocomplete="new-password"></label><button class="primary" type="submit">Salvar nova senha</button></form></section>
+{% endblock %}

@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: nexoflow
+      POSTGRES_USER: nexoflow
+      POSTGRES_PASSWORD: nexoflow-local
+    volumes:
+      - nexoflow-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexoflow -d nexoflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: production
+      APP_SECRET: ${APP_SECRET:-troque-esta-chave-antes-de-publicar-123456789}
+      DATABASE_URL: postgresql+psycopg://nexoflow:nexoflow-local@db:5432/nexoflow
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+      SECURE_COOKIES: ${SECURE_COOKIES:-0}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      UAZAPI_SERVER_URL: ${UAZAPI_SERVER_URL:-https://free.uazapi.com}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  nexoflow-postgres:

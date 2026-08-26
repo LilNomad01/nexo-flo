@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Campanhas • Nexo Flow{% endblock %}
+{% block content %}
+<div class="page-head"><div><h1>Campanhas</h1><p class="muted">Envios oficiais com opt-in, frequency cap e fila persistente.</p></div><a class="primary" href="/campaigns/new">Nova campanha</a></div>
+<section class="card">{% if campaigns %}<div class="table-wrap"><table><thead><tr><th>Campanha</th><th>Status</th><th>Ritmo</th><th>Criada em</th></tr></thead><tbody>{% for campaign in campaigns %}<tr><td><a href="/campaigns/{{ campaign.id }}"><strong>{{ campaign.name }}</strong></a></td><td><span class="status {{ campaign.status }}">{{ campaign.status }}</span></td><td>{{ campaign.processing_rate }}/min</td><td>{{ campaign.created_at.strftime('%d/%m/%Y %H:%M') }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty"><div class="empty-icon">↗</div><h3>Nenhuma campanha</h3><p>Campanhas começam como rascunho e exigem confirmação antes da fila.</p><a class="primary" href="/campaigns/new">Criar campanha</a></div>{% endif %}</section>
+{% endblock %}

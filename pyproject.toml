@@ -1,0 +1,30 @@
+[project]
+name = "nexo-flow-web"
+version = "2.0.0"
+description = "Nexo Flow web app for WhatsApp campaign operations"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi==0.116.1",
+    "uvicorn[standard]==0.35.0",
+    "sqlalchemy==2.0.43",
+    "psycopg[binary]==3.2.9",
+    "jinja2==3.1.6",
+    "python-multipart==0.0.20",
+    "itsdangerous==2.2.0",
+    "cryptography==45.0.6",
+    "httpx==0.28.1",
+    "openpyxl==3.1.5",
+    "qrcode[pil]==8.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
