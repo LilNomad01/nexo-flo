@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 
 import { waitUntil } from '@vercel/functions'
-import makeWASocket, { Browsers, BufferJSON, DisconnectReason, initAuthCreds, proto } from 'baileys'
+import makeWASocket, { Browsers, BufferJSON, DisconnectReason, fetchLatestBaileysVersion, initAuthCreds, proto } from 'baileys'
 import pg from 'pg'
 import pino from 'pino'
 
@@ -213,68 +213,230 @@ async function clearAuth(sessionId) {
 
 async function openSocket(sessionId, timeoutMs = 240_000, generationId = null) {
   const { state, saveCreds } = await authState(sessionId)
+
   const updateSession = values => generationId
     ? updateAttemptSession(sessionId, generationId, values)
     : upsertSession(sessionId, values)
+
   let manualClose = false
+  let reconnecting = false
+  let currentSock = null
+
   let settleFirst
   let settleLifetime
-  const first = new Promise(resolve => { settleFirst = resolve })
-  const lifetime = new Promise(resolve => { settleLifetime = resolve })
-  const sock = makeWASocket({
-    auth: state,
-    browser: Browsers.ubuntu('Nexo Flow Vercel'),
-    logger,
-    markOnlineOnConnect: false,
-    printQRInTerminal: false,
-    syncFullHistory: false,
+
+  const first = new Promise(resolve => {
+    settleFirst = resolve
   })
-  console.info('[Baileys] connecting', { sessionId })
-  sock.ev.on('creds.update', saveCreds)
-  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    if (qr) {
-      const updated = await updateSession({ status: 'connecting', qrcode: qr, lastError: null })
-      if (!updated) return
-      console.info('[Baileys] QR generated', { sessionId })
-      settleFirst({ kind: 'qr', qrcode: qr })
-    }
-    if (connection === 'open') {
-      const phone = String(sock.user?.id || '').split(':', 1)[0].split('@', 1)[0] || null
-      const updated = await updateSession({ status: 'connected', phone, qrcode: null, lastError: null })
-      if (!updated) return
-      console.info('[Baileys] connection opened', { sessionId })
-      settleFirst({ kind: 'open', phone })
-      settleLifetime()
-    }
-    if (connection === 'close' && !manualClose) {
-      const code = lastDisconnect?.error?.output?.statusCode
-      if (code === DisconnectReason.loggedOut) await clearAuth(sessionId)
-      const message = code === DisconnectReason.loggedOut ? 'Sessão removida pelo WhatsApp.' : String(lastDisconnect?.error || 'Conexão encerrada.')
-      const updated = await updateSession({ status: 'disconnected', qrcode: null, lastError: message })
-      if (!updated) return
-      console.info('[Baileys] connection closed', { sessionId, code: code || null })
-      settleFirst({ kind: 'close', error: message })
-      settleLifetime()
-    }
+
+  const lifetime = new Promise(resolve => {
+    settleLifetime = resolve
   })
+
+  const startSocket = async () => {
+    if (manualClose) return
+
+    const { version, isLatest } = await fetchLatestBaileysVersion()
+
+    console.info('[Baileys] starting socket', {
+      sessionId,
+      version: version.join('.'),
+      isLatest,
+    })
+
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      browser: Browsers.ubuntu('Nexo Flow'),
+      logger,
+      markOnlineOnConnect: false,
+      printQRInTerminal: false,
+      syncFullHistory: false,
+    })
+
+    currentSock = sock
+
+    sock.ev.on('creds.update', saveCreds)
+
+    sock.ev.on('connection.update', async update => {
+      const {
+        connection,
+        lastDisconnect,
+        qr,
+      } = update
+
+      if (qr) {
+        const updated = await updateSession({
+          status: 'connecting',
+          qrcode: qr,
+          lastError: null,
+        })
+
+        if (!updated) return
+
+        console.info('[Baileys] QR generated', {
+          sessionId,
+          qrLength: qr.length,
+        })
+
+        settleFirst({
+          kind: 'qr',
+          qrcode: qr,
+        })
+      }
+
+      if (connection === 'open') {
+        const phone =
+          String(sock.user?.id || '')
+            .split(':', 1)[0]
+            .split('@', 1)[0] || null
+
+        const updated = await updateSession({
+          status: 'connected',
+          phone,
+          qrcode: null,
+          lastError: null,
+        })
+
+        if (!updated) return
+
+        console.info('[Baileys] connection opened', {
+          sessionId,
+          phone,
+        })
+
+        settleFirst({
+          kind: 'open',
+          phone,
+        })
+
+        settleLifetime()
+        return
+      }
+
+      if (connection === 'close' && !manualClose) {
+        const code =
+          lastDisconnect?.error?.output?.statusCode ||
+          lastDisconnect?.error?.data?.statusCode ||
+          null
+
+        console.warn('[Baileys] connection closed', {
+          sessionId,
+          code,
+          error: String(lastDisconnect?.error || ''),
+        })
+
+        if (code === DisconnectReason.loggedOut) {
+          await clearAuth(sessionId)
+
+          await updateSession({
+            status: 'disconnected',
+            qrcode: null,
+            lastError: 'Sessão removida pelo WhatsApp.',
+          })
+
+          settleFirst({
+            kind: 'close',
+            error: 'Sessão removida pelo WhatsApp.',
+          })
+
+          settleLifetime()
+          return
+        }
+
+        await updateSession({
+          status: 'connecting',
+          qrcode: null,
+          lastError: null,
+        })
+
+        if (!reconnecting) {
+          reconnecting = true
+
+          setTimeout(async () => {
+            reconnecting = false
+
+            if (manualClose) return
+
+            try {
+              console.info('[Baileys] reconnecting', {
+                sessionId,
+                code,
+              })
+
+              await startSocket()
+            } catch (error) {
+              console.error('[Baileys] reconnect failed', {
+                sessionId,
+                error: String(error),
+              })
+
+              await updateSession({
+                status: 'disconnected',
+                qrcode: null,
+                lastError: String(error),
+              })
+
+              settleFirst({
+                kind: 'close',
+                error: String(error),
+              })
+
+              settleLifetime()
+            }
+          }, 1200)
+        }
+      }
+    })
+  }
+
+  await startSocket()
+
   const timer = setTimeout(async () => {
     if (!manualClose) {
       manualClose = true
-      await updateSession({ status: 'disconnected', qrcode: null, lastError: 'O QR expirou. Gere uma nova conexão.' })
-      console.info('[Baileys] QR expired', { sessionId })
+
+      await updateSession({
+        status: 'disconnected',
+        qrcode: null,
+        lastError: 'O QR expirou. Gere uma nova conexão.',
+      })
+
+      console.info('[Baileys] QR expired', {
+        sessionId,
+      })
     }
-    settleFirst({ kind: 'timeout' })
+
+    settleFirst({
+      kind: 'timeout',
+    })
+
     settleLifetime()
-    try { sock.end(new Error('timeout')) } catch {}
+
+    try {
+      currentSock?.end(new Error('timeout'))
+    } catch {}
   }, timeoutMs)
+
   return {
-    sock,
+    get sock() {
+      return currentSock
+    },
+
     first,
-    lifetime: lifetime.finally(() => clearTimeout(timer)),
+
+    lifetime: lifetime.finally(() => {
+      clearTimeout(timer)
+    }),
+
     close: () => {
       manualClose = true
       clearTimeout(timer)
-      try { sock.end(new Error('request complete')) } catch {}
+
+      try {
+        currentSock?.end(new Error('request complete'))
+      } catch {}
+
       settleLifetime()
     },
   }
