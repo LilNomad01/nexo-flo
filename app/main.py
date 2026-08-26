@@ -1011,17 +1011,102 @@ async def campaign_new_page(request: Request, db: Session = Depends(get_db)):
 async def create_campaign(request: Request, db: Session = Depends(get_db)):
     auth = require_auth(request, db)
     form = await checked_form(request, auth[0])
-    contact_list = db.scalar(select(ContactList).where(ContactList.id == form.get("list_id"), ContactList.workspace_id == auth[2].id))
-    number = db.scalar(select(WhatsAppNumber).where(WhatsAppNumber.id == form.get("phone_number_id"), WhatsAppNumber.workspace_id == auth[2].id))
+
+    contact_list = db.scalar(
+        select(ContactList).where(
+            ContactList.id == form.get("list_id"),
+            ContactList.workspace_id == auth[2].id,
+        )
+    )
+
+    number = db.scalar(
+        select(WhatsAppNumber).where(
+            WhatsAppNumber.id == form.get("phone_number_id"),
+            WhatsAppNumber.workspace_id == auth[2].id,
+        )
+    )
+
     if not contact_list or not number:
         raise HTTPException(400, "Lista ou canal inválido.")
-    rate = max(1, min(int(form.get("processing_rate", 20)), settings.max_messages_per_minute))
-    campaign = Campaign(workspace_id=auth[2].id, list_id=contact_list.id, phone_number_id=number.id, name=str(form.get("name", "")).strip(), status="draft", processing_rate=rate)
+
+    try:
+        rate = int(form.get("processing_rate", 20))
+    except (TypeError, ValueError):
+        rate = 20
+
+    rate = max(1, min(rate, settings.max_messages_per_minute))
+
+    raw_messages = [str(value).strip() for value in form.getlist("message_block")]
+
+    if not raw_messages:
+        legacy_message = str(form.get("message", "")).strip()
+        if legacy_message:
+            raw_messages = [legacy_message]
+
+    raw_delays = form.getlist("block_delay")
+    blocks = []
+
+    for source_index, body in enumerate(raw_messages):
+        if not body:
+            continue
+
+        if len(body) > 4096:
+            raise HTTPException(400, "Cada bloco pode ter no máximo 4096 caracteres.")
+
+        if len(blocks) >= 10:
+            raise HTTPException(400, "Use no máximo 10 blocos de mensagem.")
+
+        if not blocks:
+            delay_seconds = 0
+        else:
+            try:
+                raw_delay = raw_delays[source_index] if source_index < len(raw_delays) else 4
+                delay_seconds = int(raw_delay)
+            except (TypeError, ValueError):
+                delay_seconds = 4
+
+            delay_seconds = max(1, min(delay_seconds, 60))
+
+        blocks.append((body, delay_seconds))
+
+    if not blocks:
+        raise HTTPException(400, "Adicione pelo menos um bloco de mensagem.")
+
+    campaign = Campaign(
+        workspace_id=auth[2].id,
+        list_id=contact_list.id,
+        phone_number_id=number.id,
+        name=str(form.get("name", "")).strip(),
+        status="draft",
+        processing_rate=rate,
+    )
+
     db.add(campaign)
     db.flush()
-    db.add(CampaignStep(campaign_id=campaign.id, position=1, body=str(form.get("message", "")).strip()))
-    write_log(db, auth[2].id, "success", "campaign", "campaign.created", "Campanha criada como rascunho.", campaign_id=campaign.id)
+
+    for position, (body, delay_seconds) in enumerate(blocks, start=1):
+        db.add(
+            CampaignStep(
+                campaign_id=campaign.id,
+                position=position,
+                body=body,
+                delay_seconds=delay_seconds,
+            )
+        )
+
+    write_log(
+        db,
+        auth[2].id,
+        "success",
+        "campaign",
+        "campaign.created",
+        f"Campanha criada com {len(blocks)} bloco(s) de mensagem.",
+        campaign_id=campaign.id,
+        details={"message_blocks": len(blocks)},
+    )
+
     db.commit()
+
     return RedirectResponse(f"/campaigns/{campaign.id}", status_code=303)
 
 
@@ -1036,8 +1121,15 @@ def get_campaign(db: Session, workspace_id: str, campaign_id: str) -> Campaign:
 def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(get_db)):
     auth = require_auth(request, db)
     campaign = get_campaign(db, auth[2].id, campaign_id)
-    step = db.scalar(select(CampaignStep).where(CampaignStep.campaign_id == campaign.id).order_by(CampaignStep.position))
+
+    steps = db.scalars(
+        select(CampaignStep)
+        .where(CampaignStep.campaign_id == campaign.id)
+        .order_by(CampaignStep.position)
+    ).all()
+
     simulation = simulate_campaign(db, auth[2].id, campaign)
+
     deliveries = db.execute(
         select(Message, OutboxJob, Contact)
         .join(OutboxJob, OutboxJob.message_id == Message.id)
@@ -1045,13 +1137,16 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
         .where(Message.campaign_id == campaign.id)
         .order_by(Message.created_at)
     ).all()
+
     failed_deliveries = sum(job.status == "failed" for _, job, _ in deliveries)
+
     return page(
         request,
         "campaign_detail.html",
         auth,
         campaign=campaign,
-        step=step,
+        step=steps[0] if steps else None,
+        steps=steps,
         simulation=simulation,
         deliveries=deliveries,
         failed_deliveries=failed_deliveries,

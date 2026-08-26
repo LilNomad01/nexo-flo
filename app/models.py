@@ -138,6 +138,7 @@ class CampaignStep(Base, TimestampMixin):
     campaign_id = Column(String(48), ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False)
     position = Column(Integer, nullable=False, default=1)
     body = Column(Text, nullable=False)
+    delay_seconds = Column(Integer, nullable=False, default=4)
 
 
 class CampaignRecipient(Base, TimestampMixin):

@@ -1,8 +1,349 @@
 {% extends "base.html" %}
 {% block title %}Nova campanha • Nexo Flow{% endblock %}
 {% block content %}
-<div class="page-head"><div><p class="eyebrow">Novo rascunho</p><h1>Nova campanha</h1><p class="muted">Público → Mensagem → Ritmo → Revisão.</p></div><a class="secondary" href="/campaigns">Cancelar</a></div>
-{% if not lists or not numbers %}<div class="alert warning">Para criar uma campanha, você precisa de {% if not lists %}<a href="/lists">uma lista</a>{% endif %}{% if not lists and not numbers %} e {% endif %}{% if not numbers %}<a href="/whatsapp">um canal de WhatsApp conectado</a>{% endif %}.</div>{% endif %}
-<form method="post" action="/campaigns" class="campaign-layout"><input type="hidden" name="csrf" value="{{ csrf }}"><section class="card stack"><label>Nome da campanha<input name="name" required maxlength="160" placeholder="Ex.: Novidades de setembro"></label><div class="form-grid"><label>Lista<select name="list_id" required>{% for item in lists %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></label><label>Canal remetente<select name="phone_number_id" required>{% for number in numbers %}<option value="{{ number.id }}">{{ number.display_name }} • {{ number.provider_label }} • {{ number.phone_e164 or 'telefone pendente' }}</option>{% endfor %}</select></label></div><label>Mensagem<textarea id="message" name="message" rows="9" required maxlength="4096" placeholder="Olá, use a variável de nome abaixo..."></textarea><small>Variáveis: <code>{% raw %}{{nome}} {{empresa}} {{telefone}} {{email}}{% endraw %}</code></small></label><label>Ritmo por minuto<input type="number" name="processing_rate" min="1" max="{{ settings.max_messages_per_minute }}" value="20"><small>Máximo interno: {{ settings.max_messages_per_minute }}/min.</small></label><button class="primary" type="submit" {{ 'disabled' if not lists or not numbers else '' }}>Salvar rascunho</button></section><aside class="phone-preview"><div class="phone-top">Preview</div><div id="bubble" class="bubble">Sua mensagem aparecerá aqui.</div><p>Preview visual. Nenhuma mensagem é enviada nesta tela.</p></aside></form>
-<script>const input=document.getElementById('message'),bubble=document.getElementById('bubble');function sync(){bubble.textContent=(input.value||'Sua mensagem aparecerá aqui.').replaceAll('{{nome}}','Maria').replaceAll('{{empresa}}','Empresa');}input.addEventListener('input',sync);sync();</script>
+
+<style>
+.message-block {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+}
+
+.message-block-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.variable-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.variable-row button {
+  padding: 7px 10px;
+}
+
+.phone-preview .bubble + .bubble {
+  margin-top: 9px;
+}
+</style>
+
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Novo rascunho</p>
+    <h1>Nova campanha</h1>
+    <p class="muted">Público → Blocos de mensagem → Ritmo → Revisão.</p>
+  </div>
+  <a class="secondary" href="/campaigns">Cancelar</a>
+</div>
+
+{% if not lists or not numbers %}
+<div class="alert warning">
+  Para criar uma campanha, você precisa de
+  {% if not lists %}<a href="/lists">uma lista</a>{% endif %}
+  {% if not lists and not numbers %} e {% endif %}
+  {% if not numbers %}<a href="/whatsapp">um canal de WhatsApp conectado</a>{% endif %}.
+</div>
+{% endif %}
+
+<form method="post" action="/campaigns" class="campaign-layout">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+
+  <section class="card stack">
+
+    <label>
+      Nome da campanha
+      <input
+        name="name"
+        required
+        maxlength="160"
+        placeholder="Ex.: Prospecção clínicas agosto"
+      >
+    </label>
+
+    <div class="form-grid">
+      <label>
+        Lista
+        <select name="list_id" required>
+          {% for item in lists %}
+          <option value="{{ item.id }}">{{ item.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label>
+        Canal remetente
+        <select name="phone_number_id" required>
+          {% for number in numbers %}
+          <option value="{{ number.id }}">
+            {{ number.display_name }} • {{ number.provider_label }} • {{ number.phone_e164 or 'telefone pendente' }}
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+    </div>
+
+    <div>
+      <h2>Blocos de mensagem</h2>
+      <p class="muted">
+        Cada bloco será enviado como uma mensagem separada no WhatsApp.
+      </p>
+    </div>
+
+    <div id="message-blocks" class="stack">
+
+      <div class="message-block stack" data-message-block>
+        <div class="message-block-head">
+          <strong data-block-title>Bloco 1</strong>
+          <button
+            class="secondary"
+            type="button"
+            data-remove-block
+            hidden
+          >
+            Remover
+          </button>
+        </div>
+
+        <textarea
+          name="message_block"
+          rows="5"
+          required
+          maxlength="4096"
+          placeholder="Digite a primeira mensagem..."
+        ></textarea>
+
+        <input type="hidden" name="block_delay" value="0" data-delay-input>
+
+        <label data-delay-row hidden>
+          Aguardar antes deste bloco
+          <div class="form-grid">
+            <input
+              type="number"
+              min="1"
+              max="60"
+              value="4"
+              data-visible-delay
+            >
+            <small>segundos</small>
+          </div>
+        </label>
+
+        <div class="variable-row">
+          <button class="secondary" type="button" data-variable="nome">+ Nome</button>
+          <button class="secondary" type="button" data-variable="empresa">+ Empresa</button>
+          <button class="secondary" type="button" data-variable="telefone">+ Telefone</button>
+          <button class="secondary" type="button" data-variable="email">+ Email</button>
+        </div>
+      </div>
+
+    </div>
+
+    <button class="secondary" type="button" id="add-message-block">
+      + Adicionar outro bloco
+    </button>
+
+    <small class="muted">
+      Exemplo: primeiro uma abordagem, depois uma explicação e por último o CTA.
+    </small>
+
+    <label>
+      Ritmo por minuto
+      <input
+        type="number"
+        name="processing_rate"
+        min="1"
+        max="{{ settings.max_messages_per_minute }}"
+        value="20"
+      >
+      <small>
+        Máximo interno: {{ settings.max_messages_per_minute }}/min.
+        O intervalo dos blocos também é respeitado.
+      </small>
+    </label>
+
+    <button
+      class="primary"
+      type="submit"
+      {{ 'disabled' if not lists or not numbers else '' }}
+    >
+      Salvar rascunho
+    </button>
+
+  </section>
+
+  <aside class="phone-preview">
+    <div class="phone-top">Preview</div>
+    <div id="preview-messages"></div>
+    <p>Cada balão abaixo representa uma mensagem separada.</p>
+  </aside>
+</form>
+
+<script>
+(() => {
+  const container = document.getElementById('message-blocks');
+  const addButton = document.getElementById('add-message-block');
+  const preview = document.getElementById('preview-messages');
+
+  const open = '{' + '{';
+  const close = '}' + '}';
+
+  let lastFocusedTextarea = null;
+
+  function token(name) {
+    return open + name + close;
+  }
+
+  function example(text) {
+    return text
+      .replaceAll(token('nome'), 'Maria')
+      .replaceAll(token('empresa'), 'Clínica Exemplo')
+      .replaceAll(token('telefone'), '+5511999999999')
+      .replaceAll(token('email'), 'contato@empresa.com');
+  }
+
+  function syncPreview() {
+    const values = Array.from(
+      container.querySelectorAll('textarea[name="message_block"]')
+    )
+      .map(input => input.value.trim())
+      .filter(Boolean);
+
+    preview.replaceChildren();
+
+    if (!values.length) {
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = 'Sua mensagem aparecerá aqui.';
+      preview.appendChild(bubble);
+      return;
+    }
+
+    values.forEach(value => {
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = example(value);
+      preview.appendChild(bubble);
+    });
+  }
+
+  function syncBlocks() {
+    const blocks = Array.from(
+      container.querySelectorAll('[data-message-block]')
+    );
+
+    blocks.forEach((block, index) => {
+      block.querySelector('[data-block-title]').textContent =
+        'Bloco ' + (index + 1);
+
+      const remove = block.querySelector('[data-remove-block]');
+      remove.hidden = blocks.length === 1;
+
+      const delayRow = block.querySelector('[data-delay-row]');
+      const hiddenDelay = block.querySelector('[data-delay-input]');
+      const visibleDelay = block.querySelector('[data-visible-delay]');
+
+      if (index === 0) {
+        delayRow.hidden = true;
+        hiddenDelay.value = '0';
+      } else {
+        delayRow.hidden = false;
+        hiddenDelay.value = visibleDelay.value || '4';
+      }
+    });
+
+    addButton.disabled = blocks.length >= 10;
+
+    syncPreview();
+  }
+
+  function createBlock() {
+    const block = document.createElement('div');
+
+    block.className = 'message-block stack';
+    block.setAttribute('data-message-block', '');
+
+    block.innerHTML =
+      '<div class="message-block-head">' +
+        '<strong data-block-title></strong>' +
+        '<button class="secondary" type="button" data-remove-block>Remover</button>' +
+      '</div>' +
+      '<textarea name="message_block" rows="5" required maxlength="4096" placeholder="Digite a próxima mensagem..."></textarea>' +
+      '<input type="hidden" name="block_delay" value="4" data-delay-input>' +
+      '<label data-delay-row>' +
+        'Aguardar antes deste bloco' +
+        '<div class="form-grid">' +
+          '<input type="number" min="1" max="60" value="4" data-visible-delay>' +
+          '<small>segundos</small>' +
+        '</div>' +
+      '</label>' +
+      '<div class="variable-row">' +
+        '<button class="secondary" type="button" data-variable="nome">+ Nome</button>' +
+        '<button class="secondary" type="button" data-variable="empresa">+ Empresa</button>' +
+        '<button class="secondary" type="button" data-variable="telefone">+ Telefone</button>' +
+        '<button class="secondary" type="button" data-variable="email">+ Email</button>' +
+      '</div>';
+
+    container.appendChild(block);
+
+    block.querySelector('textarea').focus();
+
+    syncBlocks();
+  }
+
+  addButton.addEventListener('click', createBlock);
+
+  container.addEventListener('focusin', event => {
+    if (event.target.matches('textarea[name="message_block"]')) {
+      lastFocusedTextarea = event.target;
+    }
+  });
+
+  container.addEventListener('input', event => {
+    if (event.target.matches('[data-visible-delay]')) {
+      const block = event.target.closest('[data-message-block]');
+      block.querySelector('[data-delay-input]').value =
+        event.target.value || '4';
+    }
+
+    syncPreview();
+  });
+
+  container.addEventListener('click', event => {
+    const remove = event.target.closest('[data-remove-block]');
+
+    if (remove) {
+      remove.closest('[data-message-block]').remove();
+      syncBlocks();
+      return;
+    }
+
+    const variableButton = event.target.closest('[data-variable]');
+
+    if (!variableButton) return;
+
+    const block = variableButton.closest('[data-message-block]');
+    const textarea =
+      lastFocusedTextarea &&
+      block.contains(lastFocusedTextarea)
+        ? lastFocusedTextarea
+        : block.querySelector('textarea');
+
+    const value = token(variableButton.dataset.variable);
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+
+    textarea.setRangeText(value, start, end, 'end');
+    textarea.focus();
+
+    syncPreview();
+  });
+
+  syncBlocks();
+})();
+</script>
+
 {% endblock %}
