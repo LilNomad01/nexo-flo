@@ -7,6 +7,10 @@
   <meta name="description" content="Gestão profissional da WhatsApp Business Platform.">
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head>
 <body>
 {% if auth %}
@@ -37,5 +41,14 @@
   <main class="auth-shell">{% block auth_content %}{% endblock %}</main>
 {% endif %}
 {% block scripts %}{% endblock %}
+
+<script src="https://unpkg.com/lucide@latest"></script>
+<script>
+  window.addEventListener('DOMContentLoaded', function () {
+    if (window.lucide) {
+      lucide.createIcons();
+    }
+  });
+</script>
 </body>
 </html>
