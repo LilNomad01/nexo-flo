@@ -1121,29 +1121,16 @@ def get_campaign(db: Session, workspace_id: str, campaign_id: str) -> Campaign:
 def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(get_db)):
     auth = require_auth(request, db)
 
-    campaign = get_campaign(
-        db,
-        auth[2].id,
-        campaign_id,
-    )
+    campaign = get_campaign(db, auth[2].id, campaign_id)
 
     steps = db.scalars(
         select(CampaignStep)
-        .where(
-            CampaignStep.campaign_id == campaign.id
-        )
+        .where(CampaignStep.campaign_id == campaign.id)
         .order_by(CampaignStep.position)
     ).all()
 
-    contact_list = db.get(
-        ContactList,
-        campaign.list_id,
-    )
-
-    number = db.get(
-        WhatsAppNumber,
-        campaign.phone_number_id,
-    )
+    contact_list = db.get(ContactList, campaign.list_id)
+    number = db.get(WhatsAppNumber, campaign.phone_number_id)
 
     simulation = simulate_campaign(
         db,
@@ -1165,21 +1152,14 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
     )
 
     if number and number.provider == "baileys":
-        average_lead_gap = (
-            base_gap * 1.15
-            + 1.6
-        )
+        average_lead_gap = base_gap * 1.15 + 1.6
         interval_mode = "Inteligente Baileys"
     else:
         average_lead_gap = base_gap
         interval_mode = "Ritmo padrão"
 
-    estimated_seconds = (
-        simulation.eligible
-        * (
-            block_seconds
-            + average_lead_gap
-        )
+    estimated_seconds = simulation.eligible * (
+        block_seconds + average_lead_gap
     )
 
     if number and number.provider == "baileys":
@@ -1190,12 +1170,7 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
     estimated_minutes = (
         max(
             1,
-            int(
-                (
-                    estimated_seconds
-                    + 59
-                ) // 60
-            ),
+            int((estimated_seconds + 59) // 60),
         )
         if simulation.eligible
         else 0
@@ -1218,12 +1193,83 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
         .where(
             Message.campaign_id == campaign.id
         )
-        .order_by(Message.created_at)
+        .order_by(
+            Contact.name,
+            Message.created_at,
+        )
     ).all()
 
+    groups = {}
+
+    for message, job, contact in deliveries:
+        if contact.id not in groups:
+            groups[contact.id] = {
+                "contact": contact,
+                "total": 0,
+                "sent": 0,
+                "failed": 0,
+                "paused": 0,
+                "processing": 0,
+                "pending": 0,
+                "attempts": 0,
+                "diagnostic": "",
+                "status": "pending",
+            }
+
+        group = groups[contact.id]
+        group["total"] += 1
+        group["attempts"] = max(
+            group["attempts"],
+            job.attempts or 0,
+        )
+
+        if job.status == "sent":
+            group["sent"] += 1
+        elif job.status == "failed":
+            group["failed"] += 1
+        elif job.status == "paused":
+            group["paused"] += 1
+        elif job.status == "processing":
+            group["processing"] += 1
+        else:
+            group["pending"] += 1
+
+        error = (
+            message.error_message
+            or job.last_error
+            or ""
+        )
+
+        if error:
+            group["diagnostic"] = error
+
+    delivery_groups = list(groups.values())
+
+    for group in delivery_groups:
+        if group["failed"]:
+            group["status"] = "failed"
+        elif group["sent"] == group["total"] and group["total"]:
+            group["status"] = "sent"
+        elif group["paused"]:
+            group["status"] = "paused"
+        elif group["processing"]:
+            group["status"] = "processing"
+        else:
+            group["status"] = "pending"
+
+        if not group["diagnostic"]:
+            if group["sent"] == group["total"] and group["total"]:
+                group["diagnostic"] = "Todos os blocos foram aceitos."
+            elif group["sent"]:
+                group["diagnostic"] = (
+                    f'{group["sent"]}/{group["total"]} bloco(s) enviados.'
+                )
+            else:
+                group["diagnostic"] = "Aguardando processamento."
+
     failed_deliveries = sum(
-        job.status == "failed"
-        for _, job, _ in deliveries
+        group["failed"]
+        for group in delivery_groups
     )
 
     return page(
@@ -1238,7 +1284,7 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
         simulation=simulation,
         estimated_minutes=estimated_minutes,
         interval_mode=interval_mode,
-        deliveries=deliveries,
+        delivery_groups=delivery_groups,
         failed_deliveries=failed_deliveries,
     )
 
@@ -1247,26 +1293,165 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
 async def campaign_start(campaign_id: str, request: Request, db: Session = Depends(get_db)):
     auth = require_auth(request, db)
     form = await checked_form(request, auth[0])
-    campaign = get_campaign(db, auth[2].id, campaign_id)
+
+    campaign = get_campaign(
+        db,
+        auth[2].id,
+        campaign_id,
+    )
+
     if str(form.get("confirmation", "")).strip().upper() != "CONFIRMAR":
-        raise HTTPException(400, "Digite CONFIRMAR para iniciar.")
-    created = enqueue_campaign(db, auth[2].id, campaign)
-    write_log(db, auth[2].id, "success", "campaign", "campaign.started", f"Campanha iniciada com {created} destinatários.", campaign_id=campaign.id)
+        raise HTTPException(
+            400,
+            "Confirmação inválida.",
+        )
+
+    created = enqueue_campaign(
+        db,
+        auth[2].id,
+        campaign,
+    )
+
+    write_log(
+        db,
+        auth[2].id,
+        "success",
+        "campaign",
+        "campaign.started",
+        f"Campanha iniciada com {created} destinatários.",
+        campaign_id=campaign.id,
+    )
+
     db.commit()
-    return RedirectResponse(f"/campaigns/{campaign.id}?started={created}", status_code=303)
+
+    if "application/json" in request.headers.get("accept", ""):
+        return {
+            "ok": True,
+            "status": campaign.status,
+            "created": created,
+        }
+
+    return RedirectResponse(
+        f"/campaigns/{campaign.id}?started={created}",
+        status_code=303,
+    )
 
 
 @app.post("/api/campaigns/{campaign_id}/process")
 async def campaign_process(campaign_id: str, request: Request, db: Session = Depends(get_db)):
     auth = require_auth(request, db)
     await checked_form(request, auth[0])
-    campaign = get_campaign(db, auth[2].id, campaign_id)
-    if campaign.status != "running":
-        return {"processed": 0, "status": campaign.status}
-    processed = await process_available_jobs(auth[2].id)
+
+    campaign = get_campaign(
+        db,
+        auth[2].id,
+        campaign_id,
+    )
+
+    processed = 0
+
+    if campaign.status == "running":
+        processed = await process_available_jobs(
+            auth[2].id
+        )
+
     db.expire_all()
-    campaign = get_campaign(db, auth[2].id, campaign_id)
-    return {"processed": processed, "status": campaign.status}
+
+    campaign = get_campaign(
+        db,
+        auth[2].id,
+        campaign_id,
+    )
+
+    rows = db.execute(
+        select(
+            Message,
+            OutboxJob,
+        )
+        .join(
+            OutboxJob,
+            OutboxJob.message_id == Message.id,
+        )
+        .where(
+            Message.campaign_id == campaign.id
+        )
+        .order_by(Message.created_at)
+    ).all()
+
+    grouped = {}
+
+    for message, job in rows:
+        contact_id = message.contact_id
+
+        if contact_id not in grouped:
+            grouped[contact_id] = {
+                "contact_id": contact_id,
+                "total": 0,
+                "sent": 0,
+                "failed": 0,
+                "paused": 0,
+                "processing": 0,
+                "attempts": 0,
+                "diagnostic": "",
+            }
+
+        item = grouped[contact_id]
+        item["total"] += 1
+        item["attempts"] = max(
+            item["attempts"],
+            job.attempts or 0,
+        )
+
+        if job.status == "sent":
+            item["sent"] += 1
+        elif job.status == "failed":
+            item["failed"] += 1
+        elif job.status == "paused":
+            item["paused"] += 1
+        elif job.status == "processing":
+            item["processing"] += 1
+
+        error = (
+            message.error_message
+            or job.last_error
+            or ""
+        )
+
+        if error:
+            item["diagnostic"] = error
+
+    deliveries = []
+
+    for item in grouped.values():
+        if item["failed"]:
+            status = "failed"
+        elif item["sent"] == item["total"] and item["total"]:
+            status = "sent"
+        elif item["paused"]:
+            status = "paused"
+        elif item["processing"]:
+            status = "processing"
+        else:
+            status = "pending"
+
+        if not item["diagnostic"]:
+            if status == "sent":
+                item["diagnostic"] = "Todos os blocos foram aceitos."
+            elif item["sent"]:
+                item["diagnostic"] = (
+                    f'{item["sent"]}/{item["total"]} bloco(s) enviados.'
+                )
+            else:
+                item["diagnostic"] = "Aguardando processamento."
+
+        item["status"] = status
+        deliveries.append(item)
+
+    return {
+        "processed": processed,
+        "status": campaign.status,
+        "deliveries": deliveries,
+    }
 
 
 @app.post("/campaigns/{campaign_id}/retry-failed")
@@ -1335,21 +1520,285 @@ async def campaign_update_recipient(campaign_id: str, contact_id: str, request: 
     return RedirectResponse(f"/campaigns/{campaign.id}?contact_updated=1", status_code=303)
 
 
+@app.post("/campaigns/{campaign_id}/deduplicate")
+async def campaign_deduplicate(campaign_id: str, request: Request, db: Session = Depends(get_db)):
+    auth = require_auth(request, db)
+    await checked_form(request, auth[0])
+
+    campaign = get_campaign(
+        db,
+        auth[2].id,
+        campaign_id,
+    )
+
+    rows = db.execute(
+        select(
+            Message,
+            OutboxJob,
+        )
+        .join(
+            OutboxJob,
+            OutboxJob.message_id == Message.id,
+        )
+        .where(
+            Message.campaign_id == campaign.id
+        )
+        .order_by(Message.created_at)
+    ).all()
+
+    seen = set()
+    removed = 0
+    protected = 0
+
+    for message, job in rows:
+        key = (
+            message.contact_id,
+            message.idempotency_key.rsplit(":step:", 1)[-1]
+            if ":step:" in message.idempotency_key
+            else (message.body or "").strip(),
+        )
+
+        if key not in seen:
+            seen.add(key)
+            continue
+
+        if message.status in {"sent", "delivered", "read"}:
+            protected += 1
+            continue
+
+        db.delete(job)
+        db.delete(message)
+        removed += 1
+
+    db.commit()
+
+    return {
+        "ok": True,
+        "removed": removed,
+        "protected": protected,
+    }
+
+
 @app.post("/campaigns/{campaign_id}/{operation}")
 async def campaign_control(campaign_id: str, operation: str, request: Request, db: Session = Depends(get_db)):
     auth = require_auth(request, db)
     await checked_form(request, auth[0])
-    campaign = get_campaign(db, auth[2].id, campaign_id)
-    if operation not in {"pause", "resume", "cancel"}:
+
+    campaign = get_campaign(
+        db,
+        auth[2].id,
+        campaign_id,
+    )
+
+    wants_json = (
+        "application/json"
+        in request.headers.get("accept", "")
+    )
+
+    if operation not in {
+        "pause",
+        "resume",
+        "cancel",
+    }:
         raise HTTPException(404)
-    campaign.status = {"pause": "paused", "resume": "running", "cancel": "cancelled"}[operation]
-    job_status = "pending" if operation == "resume" else "paused" if operation == "pause" else "cancelled"
-    jobs = db.scalars(select(OutboxJob).join(Message, Message.id == OutboxJob.message_id).where(Message.campaign_id == campaign.id, OutboxJob.status.in_(["pending", "paused"]))).all()
-    for job in jobs:
-        job.status = job_status
-    write_log(db, auth[2].id, "info", "campaign", f"campaign.{operation}", f"Campanha {operation}.", campaign_id=campaign.id)
+
+    number = db.get(
+        WhatsAppNumber,
+        campaign.phone_number_id,
+    )
+
+    if operation == "resume":
+        if number and number.provider == "baileys":
+            try:
+                connection = BaileysProvider.connection(
+                    await baileys_provider(number).status()
+                )
+            except ProviderError as exc:
+                payload = {
+                    "ok": False,
+                    "status": "paused",
+                    "error": str(exc),
+                    "reconnect_url": f"/whatsapp/baileys/{number.id}",
+                }
+
+                if wants_json:
+                    return JSONResponse(
+                        payload,
+                        status_code=502,
+                    )
+
+                return RedirectResponse(
+                    f"/campaigns/{campaign.id}?error=Baileys+indisponível",
+                    status_code=303,
+                )
+
+            number.status = (
+                "connected"
+                if connection.connected
+                else connection.status
+            )
+
+            if connection.phone:
+                try:
+                    number.phone_e164 = normalize_phone(
+                        connection.phone
+                    )
+                except ValueError:
+                    pass
+
+            if not connection.connected:
+                campaign.status = "paused"
+                db.commit()
+
+                payload = {
+                    "ok": False,
+                    "status": "paused",
+                    "error": "O Baileys não está conectado. Reconecte o WhatsApp antes de continuar a campanha.",
+                    "reconnect_url": f"/whatsapp/baileys/{number.id}",
+                }
+
+                if wants_json:
+                    return JSONResponse(
+                        payload,
+                        status_code=409,
+                    )
+
+                return RedirectResponse(
+                    f"/campaigns/{campaign.id}?error=Reconecte+o+Baileys",
+                    status_code=303,
+                )
+
+        campaign.status = "running"
+
+        jobs = db.scalars(
+            select(OutboxJob)
+            .join(
+                Message,
+                Message.id == OutboxJob.message_id,
+            )
+            .where(
+                Message.campaign_id == campaign.id,
+                OutboxJob.status.in_(
+                    ["pending", "paused"]
+                ),
+            )
+            .order_by(
+                OutboxJob.available_at,
+                OutboxJob.created_at,
+            )
+        ).all()
+
+        base_gap = max(
+            1.5,
+            60.0 / max(
+                1,
+                campaign.processing_rate,
+            ),
+        )
+
+        cursor = 0.0
+
+        for index, job in enumerate(jobs):
+            was_paused = (
+                job.status == "paused"
+            )
+
+            job.status = "pending"
+            job.locked_at = None
+
+            if was_paused:
+                job.attempts = 0
+                job.last_error = None
+
+                message = db.get(
+                    Message,
+                    job.message_id,
+                )
+
+                if message and message.status not in {
+                    "sent",
+                    "delivered",
+                    "read",
+                }:
+                    message.status = "queued"
+                    message.error_message = None
+
+            if index > 0:
+                cursor += (
+                    base_gap
+                    + ((index * 7) % 9) / 10
+                )
+
+                if index % 10 == 0:
+                    cursor += 12
+
+            job.available_at = (
+                now()
+                + timedelta(seconds=cursor)
+            )
+
+    elif operation == "pause":
+        campaign.status = "paused"
+
+        jobs = db.scalars(
+            select(OutboxJob)
+            .join(
+                Message,
+                Message.id == OutboxJob.message_id,
+            )
+            .where(
+                Message.campaign_id == campaign.id,
+                OutboxJob.status == "pending",
+            )
+        ).all()
+
+        for job in jobs:
+            job.status = "paused"
+
+    else:
+        campaign.status = "cancelled"
+
+        jobs = db.scalars(
+            select(OutboxJob)
+            .join(
+                Message,
+                Message.id == OutboxJob.message_id,
+            )
+            .where(
+                Message.campaign_id == campaign.id,
+                OutboxJob.status.in_(
+                    ["pending", "paused"]
+                ),
+            )
+        ).all()
+
+        for job in jobs:
+            job.status = "cancelled"
+
+    write_log(
+        db,
+        auth[2].id,
+        "info",
+        "campaign",
+        f"campaign.{operation}",
+        f"Campanha {operation}.",
+        campaign_id=campaign.id,
+    )
+
     db.commit()
-    return RedirectResponse(f"/campaigns/{campaign.id}", status_code=303)
+
+    payload = {
+        "ok": True,
+        "status": campaign.status,
+    }
+
+    if wants_json:
+        return payload
+
+    return RedirectResponse(
+        f"/campaigns/{campaign.id}",
+        status_code=303,
+    )
 
 
 @app.get("/conversations", response_class=HTMLResponse)
