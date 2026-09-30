@@ -1804,11 +1804,58 @@ async def campaign_control(campaign_id: str, operation: str, request: Request, d
 @app.get("/conversations", response_class=HTMLResponse)
 def conversations_page(request: Request, selected: str = "", db: Session = Depends(get_db)):
     auth = require_auth(request, db)
-    conversations = db.scalars(select(Conversation).where(Conversation.workspace_id == auth[2].id).order_by(Conversation.last_message_at.desc())).all()
-    active = db.scalar(select(Conversation).where(Conversation.id == selected, Conversation.workspace_id == auth[2].id)) if selected else (conversations[0] if conversations else None)
+    conversations = db.scalars(
+        select(Conversation)
+        .where(Conversation.workspace_id == auth[2].id)
+        .order_by(Conversation.last_message_at.desc())
+    ).all()
+
+    conversation_cards = []
+    for conversation in conversations:
+        item_contact = db.get(Contact, conversation.contact_id)
+        last_message = db.scalar(
+            select(ConversationMessage)
+            .where(ConversationMessage.conversation_id == conversation.id)
+            .order_by(ConversationMessage.created_at.desc())
+        )
+        conversation_cards.append(
+            {
+                "conversation": conversation,
+                "contact": item_contact,
+                "last_message": last_message,
+            }
+        )
+
+    active = (
+        db.scalar(
+            select(Conversation).where(
+                Conversation.id == selected,
+                Conversation.workspace_id == auth[2].id,
+            )
+        )
+        if selected
+        else (conversations[0] if conversations else None)
+    )
     contact = db.get(Contact, active.contact_id) if active else None
-    messages = db.scalars(select(ConversationMessage).where(ConversationMessage.conversation_id == active.id).order_by(ConversationMessage.created_at)) if active else []
-    return page(request, "conversations.html", auth, conversations=conversations, active=active, contact=contact, messages=list(messages))
+    messages = (
+        db.scalars(
+            select(ConversationMessage)
+            .where(ConversationMessage.conversation_id == active.id)
+            .order_by(ConversationMessage.created_at)
+        )
+        if active
+        else []
+    )
+    return page(
+        request,
+        "conversations.html",
+        auth,
+        conversations=conversations,
+        conversation_cards=conversation_cards,
+        active=active,
+        contact=contact,
+        messages=list(messages),
+    )
 
 
 @app.post("/conversations/{conversation_id}/reply")
