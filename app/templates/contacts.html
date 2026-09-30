@@ -1,11 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Contatos • Nexo Flow{% endblock %}
 {% block content %}
-<div class="page-head">
+<div class="page-head page-head-v3">
   <div>
+    <p class="eyebrow">Base de contatos</p>
     <h1>Contatos</h1>
-    <p class="muted">Importe sua base do Excel/CSV ou cadastre contatos manualmente. Campanhas só incluem contatos com opt-in registrado.</p>
+    <p class="muted">Importe, organize e encontre rapidamente as pessoas que fazem parte das suas listas.</p>
   </div>
+  <a class="primary page-primary-action" href="#adicionar-contato">
+    <i data-lucide="user-plus"></i>
+    Adicionar contato
+  </a>
 </div>
 
 {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
@@ -19,78 +24,169 @@
 </div>
 {% endif %}
 
-<section class="card import-card">
-  <div class="card-head">
-    <div>
-      <p class="eyebrow">Excel / CSV</p>
-      <h2>Importar números</h2>
-      <p class="muted">Aceita até 5.000 linhas por arquivo. No CSV, separe as colunas com ponto e vírgula (<code>;</code>). A importação já cria ou atualiza uma lista para usar em Campanhas.</p>
-      <a class="secondary" href="/contacts/template.csv">Baixar modelo CSV com ;</a>
-    </div>
-  </div>
-  <form method="post" action="/contacts/import" enctype="multipart/form-data" class="stack">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <div class="form-grid">
-      <label>Planilha
-        <input type="file" name="spreadsheet" accept=".xlsx,.csv" required>
-        <small>Colunas reconhecidas: <code>nome;telefone;email;empresa;opt_in</code>.</small>
-      </label>
-      <label>Nome da lista
-        <input name="list_name" required maxlength="120" placeholder="Ex.: Leads Agosto">
-        <small>Se a lista já existir, os contatos serão adicionados nela sem duplicar telefone.</small>
-      </label>
-    </div>
-    <label class="check">
-      <input type="checkbox" name="all_have_opt_in">
-      <span>Confirmo que todos os números desta planilha autorizaram receber mensagens no WhatsApp.</span>
-    </label>
-    <small class="muted">Se você não marcar essa opção, somente linhas com <code>opt_in = sim/true/1</code> serão elegíveis para campanha.</small>
-    <button class="primary" type="submit">Importar planilha</button>
-  </form>
+<section class="contact-guide">
+  <div><span>1</span><div><strong>Adicione a base</strong><small>Importe Excel/CSV ou cadastre um contato.</small></div></div>
+  <div><span>2</span><div><strong>Organize em listas</strong><small>Separe sua base por público ou campanha.</small></div></div>
+  <div><span>3</span><div><strong>Use nas campanhas</strong><small>Selecione uma lista ao criar o envio.</small></div></div>
 </section>
 
-<div class="split-layout">
-  <section class="card">
-    <h2>Adicionar contato</h2>
+<div class="contact-actions-grid">
+  <section class="card import-card contact-action-card">
+    <div class="card-head">
+      <div>
+        <span class="card-icon"><i data-lucide="file-up"></i></span>
+        <p class="eyebrow">Importação</p>
+        <h2>Importar planilha</h2>
+        <p class="muted">Envie uma base em Excel ou CSV e crie a lista automaticamente.</p>
+      </div>
+      <a class="secondary compact-button" href="/contacts/template.csv"><i data-lucide="download"></i> Modelo CSV</a>
+    </div>
+
+    <form method="post" action="/contacts/import" enctype="multipart/form-data" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+
+      <label>Arquivo
+        <input type="file" name="spreadsheet" accept=".xlsx,.csv" required>
+        <small>Até 5.000 linhas. Colunas: nome, telefone, email, empresa e opt_in.</small>
+      </label>
+
+      <label>Nome da lista
+        <input name="list_name" required maxlength="120" placeholder="Ex.: Leads setembro">
+      </label>
+
+      <label class="check consent-check">
+        <input type="checkbox" name="all_have_opt_in">
+        <span>Confirmo que todos os números desta planilha autorizaram receber mensagens no WhatsApp.</span>
+      </label>
+
+      <button class="primary" type="submit"><i data-lucide="upload"></i> Importar contatos</button>
+    </form>
+  </section>
+
+  <section class="card contact-action-card" id="adicionar-contato">
+    <div class="card-head">
+      <div>
+        <span class="card-icon"><i data-lucide="user-plus"></i></span>
+        <p class="eyebrow">Cadastro manual</p>
+        <h2>Novo contato</h2>
+        <p class="muted">Adicione uma pessoa à base sem precisar importar uma planilha.</p>
+      </div>
+    </div>
+
     <form method="post" action="/contacts" class="stack">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label>Nome<input name="name" required></label>
-      <label>Telefone<input name="phone" required placeholder="+55 11 99999-9999"></label>
       <div class="form-grid">
-        <label>E-mail<input type="email" name="email"></label>
-        <label>Empresa<input name="company"></label>
+        <label>Nome<input name="name" required placeholder="Nome do contato"></label>
+        <label>Telefone<input name="phone" required placeholder="+55 11 99999-9999"></label>
+      </div>
+      <div class="form-grid">
+        <label>E-mail<input type="email" name="email" placeholder="contato@empresa.com"></label>
+        <label>Empresa<input name="company" placeholder="Nome da empresa"></label>
       </div>
       <label>Origem
         <select name="source">
           <option>Manual</option><option>Website</option><option>Formulário</option><option>CRM</option><option>API</option>
         </select>
       </label>
-      <label class="check"><input type="checkbox" name="opt_in"><span>Tenho registro de opt-in para WhatsApp</span></label>
-      <button class="primary" type="submit">Salvar contato</button>
+      <label class="check consent-check">
+        <input type="checkbox" name="opt_in">
+        <span>Tenho registro de opt-in para WhatsApp.</span>
+      </label>
+      <button class="primary" type="submit"><i data-lucide="plus"></i> Salvar contato</button>
     </form>
   </section>
-
-  <section class="card grow">
-    <div class="card-head"><div><h2>Base de contatos</h2><p class="muted">{{ contacts|length }} contato(s)</p></div></div>
-    {% if contacts %}
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Contato</th><th>Telefone</th><th>Origem</th><th>Consentimento</th></tr></thead>
-        <tbody>
-        {% for contact in contacts %}
-          <tr>
-            <td><strong>{{ contact.name }}</strong><small>{{ contact.email or '' }}</small></td>
-            <td>{{ contact.phone_e164 }}</td>
-            <td>{{ contact.source }}</td>
-            <td><span class="status {{ contact.consent.status if contact.consent else 'unknown' }}">{{ contact.consent.status if contact.consent else 'unknown' }}</span></td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-    </div>
-    {% else %}
-    <div class="empty"><div class="empty-icon">☷</div><h3>Nenhum contato cadastrado</h3><p>Importe sua planilha ou adicione um contato manualmente.</p></div>
-    {% endif %}
-  </section>
 </div>
+
+<section class="card contacts-database">
+  <div class="card-head contacts-card-head">
+    <div>
+      <p class="eyebrow">Workspace</p>
+      <h2>Base de contatos</h2>
+      <p class="muted"><strong>{{ contacts|length }}</strong> contato(s) cadastrado(s).</p>
+    </div>
+
+    <div class="contacts-toolbar">
+      <label class="search-control">
+        <i data-lucide="search"></i>
+        <input id="contact-search" type="search" placeholder="Buscar nome, telefone ou empresa">
+      </label>
+      <select id="consent-filter" aria-label="Filtrar consentimento">
+        <option value="all">Todos os consentimentos</option>
+        <option value="opted_in">Com opt-in</option>
+        <option value="unknown">Sem opt-in confirmado</option>
+        <option value="opted_out">Opt-out</option>
+      </select>
+    </div>
+  </div>
+
+  {% if contacts %}
+  <div class="table-wrap contacts-table-wrap">
+    <table id="contacts-table">
+      <thead><tr><th>Contato</th><th>Telefone</th><th>Empresa / origem</th><th>Consentimento</th></tr></thead>
+      <tbody>
+      {% for contact in contacts %}
+        {% set consent = contact.consent.status if contact.consent else 'unknown' %}
+        <tr class="contact-row"
+            data-consent="{{ consent }}"
+            data-search="{{ (contact.name ~ ' ' ~ contact.phone_e164 ~ ' ' ~ (contact.email or '') ~ ' ' ~ (contact.company or '') ~ ' ' ~ contact.source)|lower }}">
+          <td>
+            <div class="contact-identity">
+              <span class="contact-avatar">{{ contact.name[:1] | upper }}</span>
+              <div><strong>{{ contact.name }}</strong><small>{{ contact.email or 'Sem e-mail' }}</small></div>
+            </div>
+          </td>
+          <td><span class="phone-value">{{ contact.phone_e164 }}</span></td>
+          <td><strong class="company-value">{{ contact.company or 'Sem empresa' }}</strong><small>{{ contact.source }}</small></td>
+          <td><span class="status {{ consent }}">{{ consent }}</span></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div id="contact-filter-empty" class="empty empty-v3 compact-empty" hidden>
+    <span class="empty-icon-v3"><i data-lucide="search-x"></i></span>
+    <h3>Nenhum contato encontrado</h3>
+    <p>Tente mudar a busca ou o filtro de consentimento.</p>
+  </div>
+  {% else %}
+  <div class="empty empty-v3">
+    <span class="empty-icon-v3"><i data-lucide="users-round"></i></span>
+    <h3>Sua base ainda está vazia</h3>
+    <p>Importe uma planilha ou adicione o primeiro contato manualmente.</p>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const search = document.getElementById('contact-search');
+  const filter = document.getElementById('consent-filter');
+  const rows = Array.from(document.querySelectorAll('.contact-row'));
+  const empty = document.getElementById('contact-filter-empty');
+
+  if (!search || !filter || !rows.length) return;
+
+  function applyFilters() {
+    const query = search.value.trim().toLowerCase();
+    const consent = filter.value;
+    let visible = 0;
+
+    rows.forEach(row => {
+      const matchesText = !query || row.dataset.search.includes(query);
+      const currentConsent = row.dataset.consent || 'unknown';
+      const matchesConsent = consent === 'all' || currentConsent === consent;
+      const show = matchesText && matchesConsent;
+      row.hidden = !show;
+      if (show) visible += 1;
+    });
+
+    if (empty) empty.hidden = visible !== 0;
+  }
+
+  search.addEventListener('input', applyFilters);
+  filter.addEventListener('change', applyFilters);
+})();
+</script>
 {% endblock %}
