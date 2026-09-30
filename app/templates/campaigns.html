@@ -1,6 +1,46 @@
 {% extends "base.html" %}
 {% block title %}Campanhas • Nexo Flow{% endblock %}
 {% block content %}
-<div class="page-head"><div><h1>Campanhas</h1><p class="muted">Envios oficiais com opt-in, frequency cap e fila persistente.</p></div><a class="primary" href="/campaigns/new">Nova campanha</a></div>
-<section class="card">{% if campaigns %}<div class="table-wrap"><table><thead><tr><th>Campanha</th><th>Status</th><th>Ritmo</th><th>Criada em</th></tr></thead><tbody>{% for campaign in campaigns %}<tr><td><a href="/campaigns/{{ campaign.id }}"><strong>{{ campaign.name }}</strong></a></td><td><span class="status {{ campaign.status }}">{{ campaign.status }}</span></td><td>{{ campaign.processing_rate }}/min</td><td>{{ campaign.created_at.strftime('%d/%m/%Y %H:%M') }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty"><div class="empty-icon">↗</div><h3>Nenhuma campanha</h3><p>Campanhas começam como rascunho e exigem confirmação antes da fila.</p><a class="primary" href="/campaigns/new">Criar campanha</a></div>{% endif %}</section>
+<div class="page-head page-head-v3">
+  <div>
+    <p class="eyebrow">Envios</p>
+    <h1>Campanhas</h1>
+    <p class="muted">Crie seus envios, acompanhe o andamento e abra os detalhes de cada campanha.</p>
+  </div>
+  <a class="primary page-primary-action" href="/campaigns/new"><i data-lucide="plus"></i> Nova campanha</a>
+</div>
+
+<section class="card campaigns-card">
+  {% if campaigns %}
+  <div class="card-head">
+    <div>
+      <h2>Suas campanhas</h2>
+      <p class="muted">{{ campaigns|length }} campanha(s) encontrada(s).</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Campanha</th><th>Status</th><th>Ritmo</th><th>Criada em</th><th></th></tr></thead>
+      <tbody>
+      {% for campaign in campaigns %}
+        <tr>
+          <td><a class="table-primary" href="/campaigns/{{ campaign.id }}"><strong>{{ campaign.name }}</strong></a></td>
+          <td><span class="status {{ campaign.status }}">{{ campaign.status }}</span></td>
+          <td>{{ campaign.processing_rate }}/min</td>
+          <td>{{ campaign.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
+          <td><a class="row-action" href="/campaigns/{{ campaign.id }}" aria-label="Abrir campanha"><i data-lucide="chevron-right"></i></a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty empty-v3">
+    <span class="empty-icon-v3"><i data-lucide="send"></i></span>
+    <h3>Nenhuma campanha criada</h3>
+    <p>Quando estiver com sua lista e seu canal prontos, crie seu primeiro envio.</p>
+    <a class="primary" href="/campaigns/new">Criar campanha</a>
+  </div>
+  {% endif %}
+</section>
 {% endblock %}
