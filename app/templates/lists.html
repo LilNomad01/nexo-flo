@@ -1,7 +1,62 @@
 {% extends "base.html" %}
 {% block title %}Listas • Nexo Flow{% endblock %}
 {% block content %}
-<div class="page-head"><div><h1>Listas</h1><p class="muted">Organize contatos reais para segmentar campanhas.</p></div></div>
-{% if request.query_params.get('success') %}<div class="alert success">Lista criada.</div>{% elif request.query_params.get('error') %}<div class="alert error">Já existe uma lista com esse nome.</div>{% endif %}
-<div class="split-layout"><section class="card"><h2>Nova lista</h2><form method="post" action="/lists" class="stack"><input type="hidden" name="csrf" value="{{ csrf }}"><label>Nome<input name="name" required></label><label>Descrição<textarea name="description" rows="3"></textarea></label><label>Contatos<select name="contact_ids" multiple size="7">{% for contact in contacts %}<option value="{{ contact.id }}">{{ contact.name }} • {{ contact.phone_e164 }}</option>{% endfor %}</select><small>Use Ctrl/Cmd para selecionar vários.</small></label><button class="primary" type="submit">Criar lista</button></form></section><section class="card grow"><h2>Listas do workspace</h2>{% if rows %}<div class="list-cards">{% for item, count in rows %}<article><div class="list-icon">≡</div><h3>{{ item.name }}</h3><p>{{ item.description or 'Sem descrição' }}</p><strong>{{ count }} contato(s)</strong></article>{% endfor %}</div>{% else %}<div class="empty"><div class="empty-icon">≡</div><h3>Nenhuma lista criada</h3><p>Crie uma lista depois de cadastrar seus contatos.</p></div>{% endif %}</section></div>
+<div class="page-head page-head-v3">
+  <div>
+    <p class="eyebrow">Segmentação</p>
+    <h1>Listas</h1>
+    <p class="muted">Agrupe contatos por público, origem ou objetivo para usar nas campanhas.</p>
+  </div>
+</div>
+
+{% if request.query_params.get('success') %}<div class="alert success">Lista criada com sucesso.</div>{% elif request.query_params.get('error') %}<div class="alert error">Já existe uma lista com esse nome.</div>{% endif %}
+
+<div class="split-layout lists-layout">
+  <section class="card">
+    <div class="card-head">
+      <div>
+        <span class="card-icon"><i data-lucide="list-plus"></i></span>
+        <p class="eyebrow">Nova segmentação</p>
+        <h2>Criar lista</h2>
+        <p class="muted">Selecione os contatos que devem fazer parte deste público.</p>
+      </div>
+    </div>
+
+    <form method="post" action="/lists" class="stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Nome da lista<input name="name" required placeholder="Ex.: Clientes ativos"></label>
+      <label>Descrição<textarea name="description" rows="3" placeholder="Opcional"></textarea></label>
+      <label>Contatos
+        <select name="contact_ids" multiple size="8">
+          {% for contact in contacts %}<option value="{{ contact.id }}">{{ contact.name }} • {{ contact.phone_e164 }}</option>{% endfor %}
+        </select>
+        <small>Use Ctrl/Cmd para selecionar vários contatos.</small>
+      </label>
+      <button class="primary" type="submit"><i data-lucide="plus"></i> Criar lista</button>
+    </form>
+  </section>
+
+  <section class="card grow">
+    <div class="card-head">
+      <div><p class="eyebrow">Workspace</p><h2>Listas disponíveis</h2><p class="muted">Use uma destas listas ao criar uma campanha.</p></div>
+    </div>
+    {% if rows %}
+    <div class="list-cards list-cards-v3">
+      {% for item, count in rows %}
+      <article>
+        <span class="list-icon-v3"><i data-lucide="list-filter"></i></span>
+        <div><h3>{{ item.name }}</h3><p>{{ item.description or 'Sem descrição' }}</p></div>
+        <strong>{{ count }} contato(s)</strong>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty empty-v3">
+      <span class="empty-icon-v3"><i data-lucide="list-filter"></i></span>
+      <h3>Nenhuma lista criada</h3>
+      <p>Crie uma lista depois de adicionar os contatos que deseja segmentar.</p>
+    </div>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}
