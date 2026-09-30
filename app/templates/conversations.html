@@ -1,6 +1,128 @@
 {% extends "base.html" %}
 {% block title %}Conversas • Nexo Flow{% endblock %}
 {% block content %}
-<div class="page-head"><div><h1>Conversas</h1><p class="muted">Mensagens recebidas pelos webhooks configurados aparecem aqui.</p></div></div>
-<div class="inbox"><aside>{% if conversations %}{% for item in conversations %}<a href="/conversations?selected={{ item.id }}" class="conversation {{ 'selected' if active and item.id == active.id else '' }}"><strong>{{ item.contact_id }}</strong><span>{{ item.last_message_at.strftime('%d/%m %H:%M') }}</span></a>{% endfor %}{% else %}<div class="empty small"><h3>Inbox vazia</h3><p>Aguardando webhooks reais.</p></div>{% endif %}</aside><section>{% if active %}<header><strong>{{ contact.name }}</strong><span>{{ contact.phone_e164 }}</span></header><div class="messages">{% for message in messages %}<article class="{{ message.direction }}">{{ message.body }}<small>{{ message.created_at.strftime('%H:%M') }}</small></article>{% endfor %}</div><form method="post" action="/conversations/{{ active.id }}/reply" class="reply"><input type="hidden" name="csrf" value="{{ csrf }}"><input name="body" required placeholder="Digite uma resposta..."><button class="primary">Enviar</button></form>{% else %}<div class="empty"><div class="empty-icon">◇</div><h3>Nenhuma conversa</h3><p>Quando um cliente responder pelo WhatsApp, a conversa surgirá aqui.</p></div>{% endif %}</section></div>
+<div class="page-head page-head-v3">
+  <div>
+    <p class="eyebrow">Inbox</p>
+    <h1>Conversas</h1>
+    <p class="muted">Acompanhe as respostas dos seus contatos e continue o atendimento pelo mesmo canal.</p>
+  </div>
+</div>
+
+<div class="inbox inbox-v3">
+  <aside class="inbox-list">
+    <div class="inbox-list-head">
+      <div>
+        <strong>Conversas</strong>
+        <small>{{ conversation_cards|length }} conversa(s)</small>
+      </div>
+      <span class="inbox-live"><span></span> Ao vivo</span>
+    </div>
+
+    {% if conversation_cards %}
+    <label class="search-control inbox-search">
+      <i data-lucide="search"></i>
+      <input id="conversation-search" type="search" placeholder="Buscar conversa">
+    </label>
+
+    <div class="conversation-list">
+      {% for item in conversation_cards %}
+      <a href="/conversations?selected={{ item.conversation.id }}"
+         class="conversation conversation-v3 {{ 'selected' if active and item.conversation.id == active.id else '' }}"
+         data-search="{{ ((item.contact.name if item.contact else '') ~ ' ' ~ (item.contact.phone_e164 if item.contact else ''))|lower }}">
+        <span class="conversation-avatar">
+          {{ (item.contact.name[:1] if item.contact and item.contact.name else '?') | upper }}
+        </span>
+        <span class="conversation-copy">
+          <span class="conversation-line">
+            <strong>{{ item.contact.name if item.contact else 'Contato' }}</strong>
+            <time>{{ item.conversation.last_message_at.strftime('%d/%m %H:%M') }}</time>
+          </span>
+          <span class="conversation-preview">
+            {{ item.last_message.body if item.last_message and item.last_message.body else (item.contact.phone_e164 if item.contact else 'Conversa') }}
+          </span>
+        </span>
+      </a>
+      {% endfor %}
+    </div>
+
+    <div id="conversation-empty-filter" class="mini-empty" hidden>Nenhuma conversa encontrada.</div>
+    {% else %}
+    <div class="empty empty-v3 compact-empty">
+      <span class="empty-icon-v3"><i data-lucide="message-square-dashed"></i></span>
+      <h3>Inbox vazia</h3>
+      <p>As respostas recebidas aparecerão aqui.</p>
+    </div>
+    {% endif %}
+  </aside>
+
+  <section class="conversation-panel">
+    {% if active %}
+    <header class="conversation-header">
+      <div class="conversation-contact">
+        <span class="conversation-avatar large">{{ contact.name[:1] | upper if contact and contact.name else '?' }}</span>
+        <div>
+          <strong>{{ contact.name if contact else 'Contato' }}</strong>
+          <span>{{ contact.phone_e164 if contact else '' }}</span>
+        </div>
+      </div>
+      <span class="channel-chip"><i data-lucide="message-circle"></i> WhatsApp</span>
+    </header>
+
+    <div class="messages messages-v3">
+      {% for message in messages %}
+      <article class="{{ message.direction }}">
+        <div>{{ message.body }}</div>
+        <small>{{ message.created_at.strftime('%H:%M') }}</small>
+      </article>
+      {% endfor %}
+    </div>
+
+    <form method="post" action="/conversations/{{ active.id }}/reply" class="reply reply-v3">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <textarea id="reply-body" name="body" rows="1" required maxlength="4096" placeholder="Digite uma resposta..."></textarea>
+      <button class="primary" type="submit" aria-label="Enviar resposta"><i data-lucide="send"></i><span>Enviar</span></button>
+    </form>
+    {% else %}
+    <div class="empty empty-v3 conversation-empty">
+      <span class="empty-icon-v3"><i data-lucide="messages-square"></i></span>
+      <h3>Selecione uma conversa</h3>
+      <p>Escolha um contato ao lado para visualizar o histórico e responder.</p>
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const search = document.getElementById('conversation-search');
+  const items = Array.from(document.querySelectorAll('.conversation-v3'));
+  const empty = document.getElementById('conversation-empty-filter');
+
+  if (search) {
+    search.addEventListener('input', () => {
+      const q = search.value.trim().toLowerCase();
+      let visible = 0;
+      items.forEach(item => {
+        const show = !q || item.dataset.search.includes(q);
+        item.hidden = !show;
+        if (show) visible += 1;
+      });
+      if (empty) empty.hidden = visible !== 0;
+    });
+  }
+
+  const textarea = document.getElementById('reply-body');
+  if (textarea) {
+    const resize = () => {
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 140) + 'px';
+    };
+    textarea.addEventListener('input', resize);
+    resize();
+  }
+})();
+</script>
 {% endblock %}
