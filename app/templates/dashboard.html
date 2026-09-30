@@ -1,18 +1,108 @@
 {% extends "base.html" %}
 {% block title %}Visão geral • Nexo Flow{% endblock %}
 {% block content %}
-<div class="page-head"><div><p class="eyebrow">Operação real</p><h1>Visão geral</h1><p class="muted">Dados do seu workspace, sem seed e sem simulação.</p></div><a class="primary" href="/campaigns/new">Nova campanha</a></div>
-{% if metrics.numbers == 0 %}<div class="alert info"><strong>Nenhum número conectado.</strong> Configure as credenciais no servidor e valide seu Phone Number ID para habilitar envios. <a href="/whatsapp">Conectar WhatsApp</a></div>{% endif %}
-<div class="metric-grid">
-  <article class="metric"><span>Contatos</span><strong>{{ metrics.contacts }}</strong></article>
-  <article class="metric"><span>Campanhas</span><strong>{{ metrics.campaigns }}</strong></article>
-  <article class="metric"><span>Enviadas</span><strong>{{ metrics.sent }}</strong></article>
-  <article class="metric"><span>Entregues</span><strong>{{ metrics.delivered }}</strong></article>
-  <article class="metric"><span>Lidas</span><strong>{{ metrics.read }}</strong></article>
-  <article class="metric"><span>Respostas</span><strong>{{ metrics.replied }}</strong></article>
-  <article class="metric"><span>Falhas</span><strong>{{ metrics.failed }}</strong></article>
-  <article class="metric"><span>Números</span><strong>{{ metrics.numbers }}</strong></article>
+<div class="page-head page-head-v3">
+  <div>
+    <p class="eyebrow">Visão geral</p>
+    <h1>Acompanhe sua operação</h1>
+    <p class="muted">Veja os principais números e acesse rapidamente o que precisa fazer agora.</p>
+  </div>
+  <a class="primary page-primary-action" href="/campaigns/new">
+    <i data-lucide="plus"></i>
+    Nova campanha
+  </a>
 </div>
-<section class="card"><div class="card-head"><div><h2>Campanhas recentes</h2><p class="muted">A fila é processada pelo worker Python.</p></div><a href="/campaigns">Ver todas</a></div>
-{% if campaigns %}<div class="table-wrap"><table><thead><tr><th>Campanha</th><th>Status</th><th>Ritmo</th><th>Criada em</th></tr></thead><tbody>{% for campaign in campaigns %}<tr><td><a href="/campaigns/{{ campaign.id }}"><strong>{{ campaign.name }}</strong></a></td><td><span class="status {{ campaign.status }}">{{ campaign.status }}</span></td><td>{{ campaign.processing_rate }}/min</td><td>{{ campaign.created_at.strftime('%d/%m/%Y') }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty"><div class="empty-icon">↗</div><h3>Nenhuma campanha criada</h3><p>Conecte um número, cadastre contatos e crie sua primeira campanha.</p></div>{% endif %}</section>
+
+{% if metrics.numbers == 0 %}
+<div class="alert warning onboarding-alert">
+  <div class="alert-icon"><i data-lucide="smartphone"></i></div>
+  <div>
+    <strong>Conecte seu primeiro canal do WhatsApp</strong>
+    <p>Antes de enviar campanhas ou responder conversas, configure um número para o workspace.</p>
+  </div>
+  <a class="secondary" href="/whatsapp">Configurar canal</a>
+</div>
+{% endif %}
+
+<section class="quick-actions">
+  <a class="quick-action-card" href="/contacts">
+    <span class="quick-action-icon"><i data-lucide="user-plus"></i></span>
+    <div><strong>Adicionar contatos</strong><small>Importe uma planilha ou cadastre manualmente.</small></div>
+    <i class="quick-arrow" data-lucide="arrow-up-right"></i>
+  </a>
+  <a class="quick-action-card" href="/conversations">
+    <span class="quick-action-icon"><i data-lucide="messages-square"></i></span>
+    <div><strong>Abrir conversas</strong><small>Veja respostas e continue os atendimentos.</small></div>
+    <i class="quick-arrow" data-lucide="arrow-up-right"></i>
+  </a>
+  <a class="quick-action-card" href="/whatsapp">
+    <span class="quick-action-icon"><i data-lucide="plug-zap"></i></span>
+    <div><strong>Gerenciar conexões</strong><small>Confira os canais disponíveis para envio.</small></div>
+    <i class="quick-arrow" data-lucide="arrow-up-right"></i>
+  </a>
+</section>
+
+<div class="metric-grid metric-grid-v3">
+  <article class="metric">
+    <span class="metric-icon"><i data-lucide="users-round"></i></span>
+    <div><span>Contatos</span><strong>{{ metrics.contacts }}</strong></div>
+  </article>
+  <article class="metric">
+    <span class="metric-icon"><i data-lucide="send"></i></span>
+    <div><span>Campanhas</span><strong>{{ metrics.campaigns }}</strong></div>
+  </article>
+  <article class="metric">
+    <span class="metric-icon"><i data-lucide="check-check"></i></span>
+    <div><span>Entregues</span><strong>{{ metrics.delivered }}</strong></div>
+  </article>
+  <article class="metric">
+    <span class="metric-icon"><i data-lucide="eye"></i></span>
+    <div><span>Lidas</span><strong>{{ metrics.read }}</strong></div>
+  </article>
+  <article class="metric">
+    <span class="metric-icon"><i data-lucide="message-circle-reply"></i></span>
+    <div><span>Respostas</span><strong>{{ metrics.replied }}</strong></div>
+  </article>
+  <article class="metric">
+    <span class="metric-icon"><i data-lucide="triangle-alert"></i></span>
+    <div><span>Falhas</span><strong>{{ metrics.failed }}</strong></div>
+  </article>
+</div>
+
+<section class="card recent-card">
+  <div class="card-head">
+    <div>
+      <p class="eyebrow">Atividade</p>
+      <h2>Campanhas recentes</h2>
+      <p class="muted">Acompanhe o status das campanhas mais novas do workspace.</p>
+    </div>
+    <a class="text-link" href="/campaigns">Ver todas <i data-lucide="arrow-right"></i></a>
+  </div>
+
+  {% if campaigns %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Campanha</th><th>Status</th><th>Ritmo</th><th>Criada em</th><th></th></tr></thead>
+      <tbody>
+      {% for campaign in campaigns %}
+        <tr>
+          <td><a href="/campaigns/{{ campaign.id }}" class="table-primary"><strong>{{ campaign.name }}</strong></a></td>
+          <td><span class="status {{ campaign.status }}">{{ campaign.status }}</span></td>
+          <td>{{ campaign.processing_rate }}/min</td>
+          <td>{{ campaign.created_at.strftime('%d/%m/%Y') }}</td>
+          <td><a class="row-action" href="/campaigns/{{ campaign.id }}" aria-label="Abrir campanha"><i data-lucide="chevron-right"></i></a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty empty-v3">
+    <span class="empty-icon-v3"><i data-lucide="send"></i></span>
+    <h3>Você ainda não criou campanhas</h3>
+    <p>Adicione seus contatos, conecte um canal e prepare seu primeiro envio.</p>
+    <a class="primary" href="/campaigns/new">Criar primeira campanha</a>
+  </div>
+  {% endif %}
+</section>
 {% endblock %}
