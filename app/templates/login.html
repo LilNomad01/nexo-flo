@@ -1,19 +1,81 @@
 {% extends "base.html" %}
 {% block title %}Entrar • Nexo Flow{% endblock %}
 {% block auth_content %}
-<section class="auth-card">
-  <div class="auth-brand"><span class="brandmark">N</span><h1>Nexo Flow</h1></div>
-  <p class="eyebrow">WhatsApp Business Suite</p>
-  <h2>Entre no seu workspace</h2>
-  <p class="muted">Nenhum dado ou número fictício é criado.</p>
-  {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
-  <form method="post" action="/login" class="stack">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label>E-mail<input type="email" name="email" required autocomplete="email"></label>
-    <label>Senha<input id="login-password" type="password" name="password" required autocomplete="current-password"></label>
-    <label class="check"><input type="checkbox" name="remember" value="1"><span>Manter conectado neste dispositivo por 14 dias</span></label>
-    <button class="primary full" type="submit">Entrar</button>
-  </form>
-  {% if registration_open %}<p class="auth-link">Primeiro acesso? <a href="/register">Criar conta e workspace</a></p>{% else %}<p class="auth-link">Workspace já configurado. Novas contas estão protegidas.</p>{% endif %}
-</section>
+<div class="auth-layout">
+  <section class="auth-promo">
+    <div class="auth-promo-brand">
+      <span class="brandmark">N</span>
+      <div>
+        <strong>Nexo Flow</strong>
+        <small>WhatsApp Business Suite</small>
+      </div>
+    </div>
+
+    <div class="auth-promo-copy">
+      <span class="auth-kicker">Operação centralizada</span>
+      <h1>Seu WhatsApp organizado em um só lugar.</h1>
+      <p>Gerencie contatos, conversas e campanhas com uma interface simples para o dia a dia.</p>
+    </div>
+
+    <div class="auth-benefits">
+      <div><i data-lucide="messages-square"></i><span>Conversas e respostas organizadas</span></div>
+      <div><i data-lucide="users-round"></i><span>Base de contatos e listas</span></div>
+      <div><i data-lucide="send"></i><span>Campanhas com acompanhamento</span></div>
+    </div>
+
+    <div class="auth-promo-foot">
+      <i data-lucide="shield-check"></i>
+      <span>Acesso protegido ao seu workspace</span>
+    </div>
+  </section>
+
+  <section class="auth-card auth-card-v3">
+    <div class="auth-mobile-brand">
+      <span class="brandmark">N</span>
+      <strong>Nexo Flow</strong>
+    </div>
+
+    <p class="eyebrow">Bem-vindo de volta</p>
+    <h2>Acesse seu workspace</h2>
+    <p class="muted">Entre com o e-mail e a senha da sua conta.</p>
+
+    {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+    <form method="post" action="/login" class="stack auth-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+
+      <label>
+        E-mail
+        <span class="input-shell">
+          <i data-lucide="mail"></i>
+          <input type="email" name="email" required autocomplete="email" placeholder="voce@empresa.com">
+        </span>
+      </label>
+
+      <label>
+        Senha
+        <span class="input-shell">
+          <i data-lucide="lock-keyhole"></i>
+          <input id="login-password" type="password" name="password" required autocomplete="current-password" placeholder="Sua senha">
+        </span>
+      </label>
+
+      <label class="check auth-remember">
+        <input type="checkbox" name="remember" value="1">
+        <span>Manter conectado neste dispositivo</span>
+      </label>
+
+      <button class="primary full auth-submit" type="submit">
+        Entrar no Nexo Flow
+        <i data-lucide="arrow-right"></i>
+      </button>
+    </form>
+
+    {% if registration_open %}
+      <p class="auth-link">Primeiro acesso? <a href="/register">Criar conta e workspace</a></p>
+    {% else %}
+      <p class="auth-link auth-link-muted">Acesso restrito às contas autorizadas deste workspace.</p>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}
