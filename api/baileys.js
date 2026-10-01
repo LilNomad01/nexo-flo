@@ -31,6 +31,51 @@ function secureEqual(left, right) {
   return timingSafeEqual(leftHash, rightHash)
 }
 
+function extractHttpUrls(value) {
+  const matches = String(value || '').match(/https?:\/\/[^\s<>"']+/gi) || []
+  return matches
+    .map(url => url.replace(/[),.!?;:]+$/, ''))
+    .filter(Boolean)
+}
+
+function linkPreviewFor(url) {
+  if (!url) return undefined
+
+  let title = 'Abrir link'
+  let description = 'Toque para abrir.'
+
+  try {
+    const parsed = new URL(url)
+    title = parsed.hostname.replace(/^www\./, '')
+
+    if (parsed.hostname === 'chat.whatsapp.com') {
+      title = 'Convite para grupo do WhatsApp'
+      description = 'Toque para abrir o convite.'
+    }
+  } catch {}
+
+  return {
+    'matched-text': url,
+    'canonical-url': url,
+    title,
+    description,
+    previewType: 0,
+  }
+}
+
+function captionWithoutUrls(text, urls) {
+  let caption = String(text || '')
+
+  for (const url of urls) {
+    caption = caption.replace(url, '')
+  }
+
+  return caption
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 function authorized(request, action, sessionId, body) {
   const timestamp = String(request.headers['x-nexo-timestamp'] || '')
   const signature = String(request.headers['x-nexo-signature'] || '')
@@ -625,12 +670,14 @@ async function handleAction(action, sessionId, body) {
         }
 
         let content
+        const urls = extractHttpUrls(text)
 
         if (media) {
           const mediaType = String(media.type || '')
           const mime = String(media.mime || '')
           const filename = String(media.filename || 'arquivo').slice(0, 220)
           const rawData = String(media.data || '')
+          const mediaCaption = urls.length ? captionWithoutUrls(text, urls) : text
 
           const allowedTypes = new Set([
             'image',
@@ -678,24 +725,27 @@ async function handleAction(action, sessionId, body) {
             content = {
               image: mediaBuffer,
               mimetype: mime,
-              caption: text || undefined,
+              caption: mediaCaption || undefined,
             }
           } else if (mediaType === 'video') {
             content = {
               video: mediaBuffer,
               mimetype: mime,
-              caption: text || undefined,
+              caption: mediaCaption || undefined,
             }
           } else {
             content = {
               document: mediaBuffer,
               mimetype: mime,
               fileName: filename || 'documento.pdf',
-              caption: text || undefined,
+              caption: mediaCaption || undefined,
             }
           }
         } else {
-          content = { text }
+          const firstUrl = urls[0]
+          content = firstUrl
+            ? { text, linkPreview: linkPreviewFor(firstUrl) }
+            : { text }
         }
 
         const sent =
@@ -704,8 +754,26 @@ async function handleAction(action, sessionId, body) {
             content,
           )
 
-        const messageId =
+        let messageId =
           sent?.key?.id
+
+        // O WhatsApp não anexa metadados de link a captions de mídia do mesmo
+        // jeito que faz em mensagens de texto. Quando houver URL junto de uma
+        // imagem/vídeo/documento, movemos a URL para um segundo balão de texto
+        // com matched-text/canonical-url explícitos. Assim o convite/link fica
+        // clicável em Web, Desktop, Android e iOS.
+        if (media && urls.length) {
+          const linkText = urls.join('\n')
+          const linkSent = await handle.sock.sendMessage(
+            checked.jid,
+            {
+              text: linkText,
+              linkPreview: linkPreviewFor(urls[0]),
+            },
+          )
+
+          messageId = linkSent?.key?.id || messageId
+        }
 
         if (!messageId) {
           throw new Error(
