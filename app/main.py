@@ -417,6 +417,7 @@ async def import_contacts(request: Request, db: Session = Depends(get_db)):
     invalid = 0
     opted_in = 0
     duplicates = 0
+    imported_contact_ids = []
 
     seen_phones = set()
 
@@ -542,6 +543,9 @@ async def import_contacts(request: Request, db: Session = Depends(get_db)):
                 # Faz a associação ficar visível antes da próxima linha.
                 db.flush()
 
+            if contact.id not in imported_contact_ids:
+                imported_contact_ids.append(contact.id)
+
         write_log(
             db,
             auth[2].id,
@@ -555,6 +559,10 @@ async def import_contacts(request: Request, db: Session = Depends(get_db)):
                 "invalid": invalid,
                 "duplicates": duplicates,
                 "opted_in": opted_in,
+                "filename": upload.filename or "",
+                "list_id": contact_list.id,
+                "list_name": contact_list.name,
+                "contact_ids": imported_contact_ids,
             },
         )
 
@@ -582,9 +590,94 @@ def contacts_template():
 @app.get("/lists", response_class=HTMLResponse)
 def lists_page(request: Request, db: Session = Depends(get_db)):
     auth = require_auth(request, db)
-    contacts = db.scalars(select(Contact).where(Contact.workspace_id == auth[2].id).order_by(Contact.name)).all()
-    rows = db.execute(select(ContactList, func.count(ListContact.id)).outerjoin(ListContact, ListContact.list_id == ContactList.id).where(ContactList.workspace_id == auth[2].id).group_by(ContactList.id).order_by(ContactList.created_at.desc())).all()
-    return page(request, "lists.html", auth, contacts=contacts, rows=rows)
+
+    contacts = db.scalars(
+        select(Contact)
+        .where(Contact.workspace_id == auth[2].id)
+        .order_by(Contact.name)
+    ).all()
+
+    rows = db.execute(
+        select(ContactList, func.count(ListContact.id))
+        .outerjoin(ListContact, ListContact.list_id == ContactList.id)
+        .where(ContactList.workspace_id == auth[2].id)
+        .group_by(ContactList.id)
+        .order_by(ContactList.created_at.desc())
+    ).all()
+
+    last_csv_ids = []
+    last_csv_name = ""
+
+    latest_import = db.scalar(
+        select(SystemLog)
+        .where(
+            SystemLog.workspace_id == auth[2].id,
+            SystemLog.event == "contacts.imported",
+        )
+        .order_by(SystemLog.created_at.desc())
+        .limit(1)
+    )
+
+    if latest_import:
+        try:
+            details = json.loads(latest_import.details_json or "{}")
+        except ValueError:
+            details = {}
+
+        raw_ids = details.get("contact_ids") or []
+        if isinstance(raw_ids, list):
+            allowed_ids = set(
+                db.scalars(
+                    select(Contact.id).where(
+                        Contact.workspace_id == auth[2].id,
+                        Contact.id.in_(raw_ids),
+                    )
+                ).all()
+            )
+            last_csv_ids = [
+                contact_id
+                for contact_id in raw_ids
+                if contact_id in allowed_ids
+            ]
+
+        last_csv_name = str(
+            details.get("filename")
+            or details.get("list_name")
+            or ""
+        ).strip()
+
+    # Compatibilidade com importações feitas antes de registrarmos os IDs
+    # do lote: usa a lista de importação mais recente como fallback.
+    if not last_csv_ids:
+        latest_import_list = db.scalar(
+            select(ContactList)
+            .where(
+                ContactList.workspace_id == auth[2].id,
+                ContactList.description == "Criada pela importação Excel/CSV",
+            )
+            .order_by(ContactList.created_at.desc())
+            .limit(1)
+        )
+
+        if latest_import_list:
+            last_csv_ids = list(
+                db.scalars(
+                    select(ListContact.contact_id)
+                    .where(ListContact.list_id == latest_import_list.id)
+                    .order_by(ListContact.created_at)
+                ).all()
+            )
+            last_csv_name = latest_import_list.name
+
+    return page(
+        request,
+        "lists.html",
+        auth,
+        contacts=contacts,
+        rows=rows,
+        last_csv_ids=last_csv_ids,
+        last_csv_name=last_csv_name,
+    )
 
 
 @app.post("/lists")
