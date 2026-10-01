@@ -1599,6 +1599,7 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
                 "paused": 0,
                 "processing": 0,
                 "pending": 0,
+                "cancelled": 0,
                 "attempts": 0,
                 "diagnostic": "",
                 "status": "pending",
@@ -1619,6 +1620,8 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
             group["paused"] += 1
         elif job.status == "processing":
             group["processing"] += 1
+        elif job.status == "cancelled":
+            group["cancelled"] += 1
         else:
             group["pending"] += 1
 
@@ -1638,6 +1641,8 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
             group["status"] = "failed"
         elif group["sent"] == group["total"] and group["total"]:
             group["status"] = "sent"
+        elif group["cancelled"]:
+            group["status"] = "cancelled"
         elif group["paused"]:
             group["status"] = "paused"
         elif group["processing"]:
@@ -1652,11 +1657,17 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
                 group["diagnostic"] = (
                     f'{group["sent"]}/{group["total"]} bloco(s) enviados.'
                 )
+            elif group["cancelled"]:
+                group["diagnostic"] = "Envio cancelado. Pode ser reprocessado."
             else:
                 group["diagnostic"] = "Aguardando processamento."
 
     failed_deliveries = sum(
         group["failed"]
+        for group in delivery_groups
+    )
+    cancelled_deliveries = sum(
+        group["cancelled"]
         for group in delivery_groups
     )
 
@@ -1674,6 +1685,7 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
         interval_mode=interval_mode,
         delivery_groups=delivery_groups,
         failed_deliveries=failed_deliveries,
+        cancelled_deliveries=cancelled_deliveries,
     )
 
 
@@ -1737,6 +1749,31 @@ async def campaign_start(campaign_id: str, request: Request, db: Session = Depen
         raise HTTPException(
             400,
             "Confirmação inválida.",
+        )
+
+    wants_json = (
+        "application/json"
+        in request.headers.get("accept", "")
+    )
+
+    if campaign.status != "draft":
+        error_message = (
+            "Esta campanha já foi iniciada. Atualize a página antes de tentar novamente."
+        )
+
+        if wants_json:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "status": campaign.status,
+                    "error": error_message,
+                },
+                status_code=409,
+            )
+
+        return RedirectResponse(
+            f"/campaigns/{campaign.id}?error=Campanha+já+iniciada",
+            status_code=303,
         )
 
     number = db.get(
@@ -1839,7 +1876,8 @@ async def campaign_process(campaign_id: str, request: Request, db: Session = Dep
 
     if campaign.status == "running":
         processed = await process_available_jobs(
-            auth[2].id
+            auth[2].id,
+            campaign.id,
         )
 
     db.expire_all()
@@ -1949,7 +1987,10 @@ async def campaign_retry_failed(campaign_id: str, request: Request, db: Session 
     rows = db.execute(
         select(OutboxJob, Message)
         .join(Message, Message.id == OutboxJob.message_id)
-        .where(Message.campaign_id == campaign.id, OutboxJob.status == "failed")
+        .where(
+            Message.campaign_id == campaign.id,
+            OutboxJob.status.in_(["failed", "cancelled"]),
+        )
     ).all()
     for job, message in rows:
         job.status = "pending"
