@@ -294,16 +294,24 @@ async function withSessionLock(sessionId, callback) {
   let locked = false
 
   try {
-    const result = await client.query(
-      'SELECT pg_try_advisory_lock(hashtext($1)::bigint) AS locked',
-      [lockName],
-    )
+    const deadline = Date.now() + 25_000
 
-    locked = result.rows[0]?.locked === true
+    while (!locked && Date.now() < deadline) {
+      const result = await client.query(
+        'SELECT pg_try_advisory_lock(hashtext($1)::bigint) AS locked',
+        [lockName],
+      )
+
+      locked = result.rows[0]?.locked === true
+
+      if (!locked) {
+        await new Promise(resolve => setTimeout(resolve, 450))
+      }
+    }
 
     if (!locked) {
       const error = new Error(
-        'A sessão Baileys está ocupada com outro envio. Tente novamente em alguns segundos.'
+        'A sessão Baileys ainda está ocupada. O envio será tentado novamente.'
       )
       error.status = 429
       throw error
