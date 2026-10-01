@@ -49,7 +49,7 @@
 </div>
 {% endif %}
 
-<form method="post" action="/campaigns" class="campaign-layout">
+<form method="post" action="/campaigns" class="campaign-layout" enctype="multipart/form-data">
   <input type="hidden" name="csrf" value="{{ csrf }}">
 
   <section class="card stack">
@@ -111,10 +111,30 @@
         <textarea
           name="message_block"
           rows="5"
-          required
           maxlength="4096"
-          placeholder="Digite a primeira mensagem..."
+          placeholder="Digite a primeira mensagem ou envie uma mídia..."
         ></textarea>
+
+        <div class="campaign-media-picker">
+          <label class="campaign-media-upload">
+            <i data-lucide="paperclip"></i>
+            <span>
+              <strong>Adicionar mídia</strong>
+              <small>JPG, PNG, WEBP, MP4 ou PDF • até 2,5 MB</small>
+            </span>
+            <input
+              type="file"
+              name="message_media"
+              accept="image/jpeg,image/png,image/webp,video/mp4,application/pdf"
+              data-media-input
+            >
+          </label>
+
+          <div class="campaign-media-selected" data-media-selected hidden>
+            <span data-media-name></span>
+            <button type="button" data-clear-media>Remover mídia</button>
+          </div>
+        </div>
 
         <input type="hidden" name="block_delay" value="0" data-delay-input>
 
@@ -205,29 +225,82 @@
       .replaceAll(token('email'), 'contato@empresa.com');
   }
 
-  function syncPreview() {
-    const values = Array.from(
-      container.querySelectorAll('textarea[name="message_block"]')
-    )
-      .map(input => input.value.trim())
-      .filter(Boolean);
+  let previewObjectUrls = [];
 
+  function clearPreviewUrls() {
+    previewObjectUrls.forEach(url => URL.revokeObjectURL(url));
+    previewObjectUrls = [];
+  }
+
+  function syncMediaState(block) {
+    const input = block.querySelector('[data-media-input]');
+    const selected = block.querySelector('[data-media-selected]');
+    const name = block.querySelector('[data-media-name]');
+    const file = input?.files?.[0];
+
+    if (!selected || !name) return;
+
+    selected.hidden = !file;
+    name.textContent = file ? file.name : '';
+  }
+
+  function syncPreview() {
+    const blocks = Array.from(
+      container.querySelectorAll('[data-message-block]')
+    );
+
+    clearPreviewUrls();
     preview.replaceChildren();
 
-    if (!values.length) {
+    let rendered = 0;
+
+    blocks.forEach(block => {
+      const textarea = block.querySelector('textarea[name="message_block"]');
+      const input = block.querySelector('[data-media-input]');
+      const text = textarea?.value.trim() || '';
+      const file = input?.files?.[0];
+
+      if (!text && !file) return;
+
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble campaign-preview-bubble';
+
+      if (file) {
+        if (file.type.startsWith('image/')) {
+          const image = document.createElement('img');
+          const url = URL.createObjectURL(file);
+          previewObjectUrls.push(url);
+          image.src = url;
+          image.alt = file.name;
+          image.className = 'campaign-preview-image';
+          bubble.appendChild(image);
+        } else {
+          const media = document.createElement('div');
+          media.className = 'campaign-preview-file';
+          media.textContent =
+            (file.type === 'application/pdf' ? 'PDF • ' : 'Vídeo • ') +
+            file.name;
+          bubble.appendChild(media);
+        }
+      }
+
+      if (text) {
+        const caption = document.createElement('div');
+        caption.className = 'campaign-preview-caption';
+        caption.textContent = example(text);
+        bubble.appendChild(caption);
+      }
+
+      preview.appendChild(bubble);
+      rendered += 1;
+    });
+
+    if (!rendered) {
       const bubble = document.createElement('div');
       bubble.className = 'bubble';
       bubble.textContent = 'Sua mensagem aparecerá aqui.';
       preview.appendChild(bubble);
-      return;
     }
-
-    values.forEach(value => {
-      const bubble = document.createElement('div');
-      bubble.className = 'bubble';
-      bubble.textContent = example(value);
-      preview.appendChild(bubble);
-    });
   }
 
   function syncBlocks() {
@@ -257,6 +330,7 @@
 
     addButton.disabled = blocks.length >= 10;
 
+    blocks.forEach(syncMediaState);
     syncPreview();
   }
 
@@ -271,7 +345,18 @@
         '<strong data-block-title></strong>' +
         '<button class="secondary" type="button" data-remove-block>Remover</button>' +
       '</div>' +
-      '<textarea name="message_block" rows="5" required maxlength="4096" placeholder="Digite a próxima mensagem..."></textarea>' +
+      '<textarea name="message_block" rows="5" maxlength="4096" placeholder="Digite a próxima mensagem ou envie uma mídia..."></textarea>' +
+      '<div class="campaign-media-picker">' +
+        '<label class="campaign-media-upload">' +
+          '<span class="campaign-media-paperclip">＋</span>' +
+          '<span><strong>Adicionar mídia</strong><small>JPG, PNG, WEBP, MP4 ou PDF • até 2,5 MB</small></span>' +
+          '<input type="file" name="message_media" accept="image/jpeg,image/png,image/webp,video/mp4,application/pdf" data-media-input>' +
+        '</label>' +
+        '<div class="campaign-media-selected" data-media-selected hidden>' +
+          '<span data-media-name></span>' +
+          '<button type="button" data-clear-media>Remover mídia</button>' +
+        '</div>' +
+      '</div>' +
       '<input type="hidden" name="block_delay" value="4" data-delay-input>' +
       '<label data-delay-row>' +
         'Aguardar antes deste bloco' +
@@ -312,7 +397,33 @@
     syncPreview();
   });
 
+  container.addEventListener('change', event => {
+    if (event.target.matches('[data-media-input]')) {
+      const file = event.target.files?.[0];
+
+      if (file && file.size > 2500000) {
+        window.alert('A mídia pode ter no máximo 2,5 MB.');
+        event.target.value = '';
+      }
+
+      const block = event.target.closest('[data-message-block]');
+      syncMediaState(block);
+      syncPreview();
+    }
+  });
+
   container.addEventListener('click', event => {
+    const clearMedia = event.target.closest('[data-clear-media]');
+
+    if (clearMedia) {
+      const block = clearMedia.closest('[data-message-block]');
+      const input = block.querySelector('[data-media-input]');
+      input.value = '';
+      syncMediaState(block);
+      syncPreview();
+      return;
+    }
+
     const remove = event.target.closest('[data-remove-block]');
 
     if (remove) {
