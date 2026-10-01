@@ -13,6 +13,9 @@
 {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 {% if sync_errors %}<div class="alert warning">Não foi possível atualizar {{ sync_errors|length }} instância(s) agora. O último estado conhecido foi mantido.</div>{% endif %}
 {% if request.query_params.get('success') == 'meta' %}<div class="alert success">Canal oficial validado e conectado.</div>{% endif %}
+{% if request.query_params.get('disconnected') == '1' %}<div class="alert success">Canal desconectado com sucesso.</div>{% endif %}
+{% if request.query_params.get('disconnected') == 'local' %}<div class="alert warning">O canal foi desativado no Nexo Flow. O provedor externo não confirmou a desconexão, mas novos envios por este canal estão bloqueados.</div>{% endif %}
+{% if request.query_params.get('deleted') %}<div class="alert success">Canal apagado do Nexo Flow.</div>{% endif %}
 
 <div class="connection-options">
   <article class="card connection-option featured">
@@ -99,33 +102,164 @@
   </section>
 </div>
 
-<section class="card">
-  <h2>Canais conectados</h2>
+<section class="card channels-card">
+  <div class="card-head channels-card-head">
+    <div>
+      <p class="eyebrow">Gerenciamento</p>
+      <h2>Canais conectados</h2>
+      <p class="muted">Gerencie, desconecte ou remova conexões que você não usa mais.</p>
+    </div>
+    {% if numbers %}
+    <span class="channels-count">{{ numbers|length }} canal{% if numbers|length != 1 %}is{% endif %}</span>
+    {% endif %}
+  </div>
+
   {% if numbers %}
-  <div class="channel-grid">
+  <div class="channel-grid channel-grid-v4">
     {% for number in numbers %}
-    <article class="channel">
-      <div class="channel-mark">◉</div>
-      <div><h3>{{ number.display_name }}</h3><p>{{ number.phone_e164 or 'Telefone pendente' }}</p></div>
-      <span class="connection-state {{ 'connected' if number.status == 'connected' else 'unknown' }}"><i></i>{{ {'connected':'Conectado','connecting':'Conectando','disconnected':'Desconectado','hibernated':'Hibernando'}.get(number.status, number.status) }}</span>
-      <dl>
-        <div><dt>Provedor</dt><dd>{{ number.provider_label }}</dd></div>
-        <div><dt>{{ 'Phone Number ID' if number.provider == 'meta_cloud' else 'Session/Instance ID' }}</dt><dd>{{ number.phone_number_id }}</dd></div>
+    <article class="channel channel-v4">
+      <div class="channel-main-row">
+        <div class="channel-mark channel-mark-v4">
+          <i data-lucide="{{ 'badge-check' if number.provider == 'meta_cloud' else 'radio' }}"></i>
+        </div>
+
+        <div class="channel-title-copy">
+          <h3>{{ number.display_name }}</h3>
+          <p>{{ number.phone_e164 or 'Telefone pendente' }}</p>
+        </div>
+
+        <span class="connection-state {{ 'connected' if number.status == 'connected' else 'unknown' }}">
+          <i></i>
+          {{
+            {
+              'connected':'Conectado',
+              'connecting':'Conectando',
+              'disconnected':'Desconectado',
+              'disabled':'Desconectado',
+              'hibernated':'Hibernando',
+              'pending':'Pendente'
+            }.get(number.status, number.status)
+          }}
+        </span>
+      </div>
+
+      <dl class="channel-details-v4">
+        <div>
+          <dt>Provedor</dt>
+          <dd>{{ number.provider_label }}</dd>
+        </div>
+
+        <div>
+          <dt>{{ 'Phone Number ID' if number.provider == 'meta_cloud' else 'Session/Instance ID' }}</dt>
+          <dd class="channel-id-value">{{ number.phone_number_id }}</dd>
+        </div>
+
         {% if number.provider == 'meta_cloud' %}
-        <div><dt>WABA</dt><dd>{{ number.waba_id }}</dd></div>
-        <div><dt>Qualidade Meta</dt><dd>{{ number.quality_rating or 'Não informada' }}</dd></div>
+        <div>
+          <dt>WABA</dt>
+          <dd>{{ number.waba_id }}</dd>
+        </div>
+        <div>
+          <dt>Qualidade Meta</dt>
+          <dd>{{ number.quality_rating or 'Não informada' }}</dd>
+        </div>
         {% elif number.provider == 'uazapi' %}
-        <div><dt>Conexão</dt><dd><a href="/whatsapp/uazapi/{{ number.id }}">Ver QR/status</a></dd></div>
+        <div>
+          <dt>Conexão</dt>
+          <dd><a href="/whatsapp/uazapi/{{ number.id }}">Ver QR/status</a></dd>
+        </div>
         {% else %}
-        <div><dt>Execução</dt><dd>{{ 'Vercel gerenciada' if number.waba_id == 'vercel-internal' else number.waba_id }}</dd></div>
-        <div><dt>Conexão</dt><dd><a href="/whatsapp/baileys/{{ number.id }}">Ver QR/status</a></dd></div>
+        <div>
+          <dt>Execução</dt>
+          <dd>{{ 'Vercel gerenciada' if number.waba_id == 'vercel-internal' else number.waba_id }}</dd>
+        </div>
+        <div>
+          <dt>Conexão</dt>
+          <dd><a href="/whatsapp/baileys/{{ number.id }}">Ver QR/status</a></dd>
+        </div>
         {% endif %}
       </dl>
+
+      <div class="channel-actions">
+        {% if number.provider == 'uazapi' %}
+        <a class="channel-action status-action" href="/whatsapp/uazapi/{{ number.id }}">
+          <i data-lucide="qr-code"></i>
+          Status
+        </a>
+        {% elif number.provider == 'baileys' %}
+        <a class="channel-action status-action" href="/whatsapp/baileys/{{ number.id }}">
+          <i data-lucide="qr-code"></i>
+          Status
+        </a>
+        {% endif %}
+
+        {% if number.status != 'disabled' %}
+        <form
+          method="post"
+          action="/whatsapp/{{ number.id }}/disconnect"
+          class="channel-inline-form js-disconnect-channel"
+          data-channel-name="{{ number.display_name }}"
+        >
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="channel-action disconnect-action" type="submit">
+            <i data-lucide="unlink"></i>
+            Desconectar
+          </button>
+        </form>
+        {% endif %}
+
+        <form
+          method="post"
+          action="/whatsapp/{{ number.id }}/delete"
+          class="channel-inline-form js-delete-channel"
+          data-channel-name="{{ number.display_name }}"
+        >
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="channel-action delete-action" type="submit">
+            <i data-lucide="trash-2"></i>
+            Apagar
+          </button>
+        </form>
+      </div>
     </article>
     {% endfor %}
   </div>
   {% else %}
-  <div class="empty"><div class="empty-icon">◉</div><h3>Nenhum canal conectado</h3><p>Escolha Meta Cloud API, UAZAPI ou Baileys para habilitar campanhas.</p></div>
+  <div class="empty empty-v3">
+    <span class="empty-icon-v3"><i data-lucide="radio"></i></span>
+    <h3>Nenhum canal conectado</h3>
+    <p>Escolha Meta Cloud API, UAZAPI ou Baileys para habilitar campanhas.</p>
+  </div>
   {% endif %}
 </section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  document.querySelectorAll('.js-disconnect-channel').forEach(form => {
+    form.addEventListener('submit', event => {
+      const name = form.dataset.channelName || 'este canal';
+
+      if (!window.confirm(
+        'Desconectar "' + name + '"?\n\nCampanhas em execução usando este canal serão pausadas.'
+      )) {
+        event.preventDefault();
+      }
+    });
+  });
+
+  document.querySelectorAll('.js-delete-channel').forEach(form => {
+    form.addEventListener('submit', event => {
+      const name = form.dataset.channelName || 'este canal';
+
+      if (!window.confirm(
+        'Apagar "' + name + '" do Nexo Flow?\n\nO histórico de campanhas e mensagens será preservado, mas esta conexão deixará de aparecer e não poderá mais enviar mensagens.'
+      )) {
+        event.preventDefault();
+      }
+    });
+  });
+})();
+</script>
 {% endblock %}
