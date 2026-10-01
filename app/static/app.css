@@ -3582,3 +3582,171 @@ body {
     width: 144px;
   }
 }
+
+
+/* === CAMPAIGN MEDIA V1 === */
+
+.campaign-media-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.campaign-media-upload {
+  min-height: 62px;
+  display: flex !important;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 13px;
+  border: 1px dashed #d8dbe6;
+  border-radius: 14px;
+  background: #fafbfe;
+  color: #59667b;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+
+.campaign-media-upload:hover {
+  border-color: #bfc0fa;
+  background: #f6f5ff;
+}
+
+.campaign-media-upload > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--v3-purple);
+}
+
+.campaign-media-upload > span:not(.campaign-media-paperclip) {
+  min-width: 0;
+  flex: 1;
+}
+
+.campaign-media-upload strong,
+.campaign-media-upload small {
+  display: block;
+}
+
+.campaign-media-upload strong {
+  color: #39465c;
+  font-size: .78rem;
+}
+
+.campaign-media-upload small {
+  margin-top: 3px;
+  color: #909aac;
+  font-size: .66rem;
+}
+
+.campaign-media-upload input[type="file"] {
+  position: absolute;
+  width: 1px !important;
+  height: 1px !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.campaign-media-paperclip {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--v3-purple-soft);
+  color: var(--v3-purple);
+  font-size: 1rem;
+}
+
+.campaign-media-selected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid #deddf9;
+  border-radius: 11px;
+  background: #f6f5ff;
+  color: #575f75;
+  font-size: .7rem;
+}
+
+.campaign-media-selected[hidden] {
+  display: none;
+}
+
+.campaign-media-selected > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.campaign-media-selected button {
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #b24b5c;
+  font-size: .68rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.campaign-preview-bubble {
+  overflow: hidden;
+  padding: 6px !important;
+}
+
+.campaign-preview-image {
+  display: block;
+  width: 100%;
+  max-height: 220px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.campaign-preview-file {
+  padding: 16px 12px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.5);
+  color: #59667b;
+  font-size: .72rem;
+  font-weight: 700;
+}
+
+.campaign-preview-caption {
+  padding: 8px 7px 5px;
+  white-space: pre-wrap;
+}
+
+.whatsapp-media-preview {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.whatsapp-video-preview {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: #111827;
+}
+
+.whatsapp-document-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255,255,255,.55);
+  color: #4f5b70;
+  font-size: .72rem;
+  font-weight: 750;
+}
