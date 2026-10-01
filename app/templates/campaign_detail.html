@@ -724,6 +724,7 @@
   let processing = false;
   let stopped = false;
   let timer = null;
+  let controlRevision = 0;
 
 
   const statusBadge =
@@ -975,13 +976,18 @@
     if (
       processing
       || status !== 'running'
-      || document.hidden
     ) {
       schedule(2500);
       return;
     }
 
     processing = true;
+
+    // Marca qual estado de controle existia quando este processamento
+    // começou. Se o usuário pausar/retomar enquanto a requisição ainda está
+    // em voo, a resposta antiga não poderá sobrescrever o comando mais novo.
+    const requestRevision =
+      controlRevision;
 
     const body =
       new FormData();
@@ -1025,7 +1031,8 @@
       );
 
       if (
-        result.status !== status
+        requestRevision === controlRevision
+        && result.status !== status
       ) {
 
         setStatus(
@@ -1070,6 +1077,11 @@
         async event => {
 
           event.preventDefault();
+
+          // Invalida qualquer /process que tenha começado antes deste
+          // comando. Isso elimina a corrida em que uma resposta antiga
+          // colocava a tela novamente em "paused" logo após Retomar.
+          controlRevision += 1;
 
           const button =
             form.querySelector(
