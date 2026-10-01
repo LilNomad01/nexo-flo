@@ -78,8 +78,20 @@ class UazapiProvider:
         return bool(result.get("isInWhatsapp") or result.get("isInWhatsApp") or result.get("exists"))
 
     async def send_text(self, to: str, body: str) -> str:
+        payload = {
+            "number": to.lstrip("+"),
+            "text": body,
+        }
+        if "https://" in body or "http://" in body:
+            payload["linkPreview"] = True
+            payload["linkPreviewLarge"] = True
+
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(f"{self.base_url}/send/text", json={"number": to.lstrip("+"), "text": body}, headers=self.headers)
+            response = await client.post(
+                f"{self.base_url}/send/text",
+                json=payload,
+                headers=self.headers,
+            )
         data = self._decode(response)
         containers = [data]
         containers.extend(item for item in (data.get("data"), data.get("message"), data.get("response")) if isinstance(item, dict))
