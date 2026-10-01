@@ -52,6 +52,15 @@ class UazapiProvider:
             response = await client.get(f"{self.base_url}/instance/status", headers=self.headers)
         return self._decode(response)
 
+    async def disconnect(self) -> dict:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{self.base_url}/instance/disconnect",
+                json={},
+                headers=self.headers,
+            )
+        return self._decode(response)
+
     async def check_number(self, number: str) -> bool:
         async with httpx.AsyncClient(timeout=20) as client:
             response = await client.post(
