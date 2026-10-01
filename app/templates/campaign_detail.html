@@ -697,7 +697,7 @@
         reconnectUrl;
 
       link.textContent =
-        ' Reconectar Baileys';
+        ' Corrigir conexão';
 
       link.style.marginLeft =
         '10px';
@@ -1113,14 +1113,27 @@
         const result =
           await response.json();
 
-        if (response.ok) {
+        if (!response.ok) {
 
-          setStatus(
-            result.status,
-            'Campanha iniciada com sucesso.'
+          showMessage(
+            result.error
+              || result.detail
+              || 'Não foi possível iniciar a campanha.',
+            'error',
+            result.reconnect_url
           );
 
+          if (result.status) {
+            setStatus(result.status);
+          }
+
+          return;
         }
+
+        setStatus(
+          result.status,
+          'Campanha iniciada com sucesso.'
+        );
 
       }
     );
