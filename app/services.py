@@ -226,8 +226,10 @@ def enqueue_campaign(db: Session, workspace_id: str, campaign: Campaign) -> int:
             message = Message(
                 workspace_id=workspace_id,
                 campaign_id=campaign.id,
+                campaign_step_id=step.id,
                 contact_id=contact.id,
                 phone_number_id=number.id,
+                type=step.media_type or "text",
                 body=render_variables(
                     step.body,
                     contact,
