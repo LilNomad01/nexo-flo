@@ -525,6 +525,19 @@ async function waitForOpen(socketHandle, timeoutMs = 25_000) {
 
 async function handleAction(action, sessionId, body) {
   if (action === 'status') return sessionSnapshot(sessionId)
+
+  if (action === 'disconnect') {
+    await ensureSchema()
+    await clearAuth(sessionId)
+    await upsertSession(sessionId, {
+      status: 'disconnected',
+      qrcode: null,
+      lastError: null,
+      generationId: null,
+    })
+    return sessionSnapshot(sessionId)
+  }
+
   if (action === 'connect' || action === 'create') {
     if (action === 'connect') await clearAuth(sessionId)
     const generationId = randomBytes(16).toString('hex')
