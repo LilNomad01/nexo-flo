@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from .config import settings
 from .db import session_scope
 from .log_service import write_log
-from .models import Campaign, CampaignRecipient, Contact, Message, OutboxJob, WhatsAppNumber
+from .models import Campaign, CampaignRecipient, CampaignStep, Contact, Message, OutboxJob, WhatsAppNumber
 from .providers import ProviderError
 from .providers.baileys import BaileysProvider, VercelBaileysProvider
 from .providers.meta import MetaProvider
@@ -104,11 +104,40 @@ async def _dispatch(job_id: str) -> None:
                             False,
                         )
 
-                provider_id = await provider.send_text(
-                    contact.phone_e164,
-                    message.body or "",
-                    message.idempotency_key,
+                step = (
+                    db.get(CampaignStep, message.campaign_step_id)
+                    if message.campaign_step_id
+                    else None
                 )
+
+                if message.type != "text":
+                    if (
+                        not step
+                        or not step.media_type
+                        or not step.media_mime
+                        or not step.media_data_base64
+                    ):
+                        raise ProviderError(
+                            "A mídia deste bloco não está disponível.",
+                            "missing_campaign_media",
+                            False,
+                        )
+
+                    provider_id = await provider.send_media(
+                        contact.phone_e164,
+                        message.body or "",
+                        message.idempotency_key,
+                        step.media_type,
+                        step.media_mime,
+                        step.media_filename or "arquivo",
+                        step.media_data_base64,
+                    )
+                else:
+                    provider_id = await provider.send_text(
+                        contact.phone_e164,
+                        message.body or "",
+                        message.idempotency_key,
+                    )
             else:
                 raise ProviderError("Provedor de WhatsApp não suportado.", "unsupported_provider", False)
             message.provider_message_id = provider_id
