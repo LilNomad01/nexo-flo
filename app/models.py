@@ -139,6 +139,10 @@ class CampaignStep(Base, TimestampMixin):
     position = Column(Integer, nullable=False, default=1)
     body = Column(Text, nullable=False)
     delay_seconds = Column(Integer, nullable=False, default=4)
+    media_type = Column(String(24))
+    media_mime = Column(String(120))
+    media_filename = Column(String(220))
+    media_data_base64 = Column(Text)
 
 
 class CampaignRecipient(Base, TimestampMixin):
@@ -164,6 +168,7 @@ class Message(Base, TimestampMixin):
     id = Column(String(48), primary_key=True, default=lambda: uid("msg"))
     workspace_id = Column(String(48), nullable=False, index=True)
     campaign_id = Column(String(48), ForeignKey("campaigns.id"))
+    campaign_step_id = Column(String(48), ForeignKey("campaign_steps.id", ondelete="SET NULL"))
     contact_id = Column(String(48), ForeignKey("contacts.id"), nullable=False)
     phone_number_id = Column(String(48), ForeignKey("whatsapp_phone_numbers.id"), nullable=False)
     direction = Column(String(16), nullable=False, default="outbound")
