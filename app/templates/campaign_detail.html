@@ -157,9 +157,9 @@
   <span
     id="campaign-status"
     data-campaign-status
-    class="status {{ 'failed' if failed_deliveries else campaign.status }}"
+    class="status {{ 'failed' if failed_deliveries else 'cancelled' if cancelled_deliveries else campaign.status }}"
   >
-    {{ 'failed' if failed_deliveries else campaign.status }}
+    {{ 'failed' if failed_deliveries else 'cancelled' if cancelled_deliveries else campaign.status }}
   </span>
 </div>
 
@@ -194,6 +194,11 @@
 <div class="alert error">
   <strong>A campanha terminou com falha.</strong>
   Confira os destinatários indicados abaixo.
+</div>
+{% elif cancelled_deliveries %}
+<div class="alert warning">
+  <strong>Existem envios cancelados que não foram disparados.</strong>
+  Você pode recolocá-los na fila sem reenviar os que já foram enviados.
 </div>
 {% endif %}
 
@@ -390,13 +395,13 @@
 
     </section>
 
-    {% if failed_deliveries %}
+    {% if failed_deliveries or cancelled_deliveries %}
 
     <section class="card">
-      <h2>Reprocessar falhas</h2>
+      <h2>Reprocessar não enviados</h2>
       <p class="muted">
-        Depois de corrigir os números,
-        reenvie somente as mensagens que falharam.
+        Recoloque na fila somente mensagens que falharam ou foram canceladas.
+        O que já foi enviado não será duplicado.
       </p>
 
       <form
@@ -406,7 +411,7 @@
         <input type="hidden" name="csrf" value="{{ csrf }}">
 
         <button class="primary full" type="submit">
-          Tentar falhas novamente
+          Tentar envios novamente
         </button>
       </form>
     </section>
@@ -778,6 +783,15 @@
     status =
       newStatus || status;
 
+    const startCard =
+      document.querySelector(
+        '.confirm-campaign-card'
+      );
+
+    if (startCard && status !== 'draft') {
+      startCard.hidden = true;
+    }
+
     if (statusBadge) {
       statusBadge.textContent =
         status.toUpperCase();
@@ -1113,6 +1127,17 @@
         const submitter =
           event.submitter;
 
+        const submitButton =
+          startForm.querySelector(
+            'button[type="submit"]'
+          );
+
+        if (submitButton) {
+          submitButton.disabled = true;
+          submitButton.textContent =
+            'INICIANDO...';
+        }
+
         const body =
           new FormData(startForm);
 
@@ -1152,6 +1177,12 @@
 
           if (result.status) {
             setStatus(result.status);
+          }
+
+          if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.textContent =
+              'CONFIRMAR CAMPANHA';
           }
 
           return;
