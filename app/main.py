@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import hmac
 import json
@@ -9,7 +10,7 @@ from typing import Optional
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -1350,10 +1351,70 @@ async def create_campaign(request: Request, db: Session = Depends(get_db)):
             raw_messages = [legacy_message]
 
     raw_delays = form.getlist("block_delay")
+    raw_media = form.getlist("message_media")
     blocks = []
 
+    allowed_media = {
+        "image/jpeg": ("image", "JPG"),
+        "image/png": ("image", "PNG"),
+        "image/webp": ("image", "WEBP"),
+        "video/mp4": ("video", "MP4"),
+        "application/pdf": ("document", "PDF"),
+    }
+    max_media_bytes = 2_500_000
+
+    def valid_media_signature(mime: str, data: bytes) -> bool:
+        if mime == "image/jpeg":
+            return data.startswith(b"\xff\xd8\xff")
+        if mime == "image/png":
+            return data.startswith(b"\x89PNG\r\n\x1a\n")
+        if mime == "image/webp":
+            return len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+        if mime == "video/mp4":
+            return len(data) >= 12 and data[4:8] == b"ftyp"
+        if mime == "application/pdf":
+            return data.startswith(b"%PDF")
+        return False
+
     for source_index, body in enumerate(raw_messages):
-        if not body:
+        upload = raw_media[source_index] if source_index < len(raw_media) else None
+        filename = str(getattr(upload, "filename", "") or "").strip()
+        media_type = None
+        media_mime = None
+        media_filename = None
+        media_data_base64 = None
+
+        if filename:
+            media_mime = str(getattr(upload, "content_type", "") or "").lower().strip()
+
+            if media_mime not in allowed_media:
+                raise HTTPException(
+                    400,
+                    "Formato de mídia não suportado. Use JPG, PNG, WEBP, MP4 ou PDF.",
+                )
+
+            media_data = await upload.read(max_media_bytes + 1)
+
+            if not media_data:
+                raise HTTPException(400, "O arquivo de mídia está vazio.")
+
+            if len(media_data) > max_media_bytes:
+                raise HTTPException(
+                    400,
+                    "A mídia pode ter no máximo 2,5 MB para envio seguro pelo Baileys/Vercel.",
+                )
+
+            if not valid_media_signature(media_mime, media_data):
+                raise HTTPException(
+                    400,
+                    "O conteúdo do arquivo não corresponde ao formato informado.",
+                )
+
+            media_type = allowed_media[media_mime][0]
+            media_filename = Path(filename).name[:220]
+            media_data_base64 = base64.b64encode(media_data).decode("ascii")
+
+        if not body and not media_type:
             continue
 
         if len(body) > 4096:
@@ -1373,10 +1434,25 @@ async def create_campaign(request: Request, db: Session = Depends(get_db)):
 
             delay_seconds = max(1, min(delay_seconds, 60))
 
-        blocks.append((body, delay_seconds))
+        blocks.append(
+            {
+                "body": body,
+                "delay_seconds": delay_seconds,
+                "media_type": media_type,
+                "media_mime": media_mime,
+                "media_filename": media_filename,
+                "media_data_base64": media_data_base64,
+            }
+        )
 
     if not blocks:
-        raise HTTPException(400, "Adicione pelo menos um bloco de mensagem.")
+        raise HTTPException(400, "Adicione pelo menos texto ou mídia em um bloco.")
+
+    if number.provider != "baileys" and any(block["media_type"] for block in blocks):
+        raise HTTPException(
+            400,
+            "O envio de mídia desta versão está disponível somente para canais Baileys.",
+        )
 
     campaign = Campaign(
         workspace_id=auth[2].id,
@@ -1390,13 +1466,17 @@ async def create_campaign(request: Request, db: Session = Depends(get_db)):
     db.add(campaign)
     db.flush()
 
-    for position, (body, delay_seconds) in enumerate(blocks, start=1):
+    for position, block in enumerate(blocks, start=1):
         db.add(
             CampaignStep(
                 campaign_id=campaign.id,
                 position=position,
-                body=body,
-                delay_seconds=delay_seconds,
+                body=block["body"],
+                delay_seconds=block["delay_seconds"],
+                media_type=block["media_type"],
+                media_mime=block["media_mime"],
+                media_filename=block["media_filename"],
+                media_data_base64=block["media_data_base64"],
             )
         )
 
@@ -1408,7 +1488,10 @@ async def create_campaign(request: Request, db: Session = Depends(get_db)):
         "campaign.created",
         f"Campanha criada com {len(blocks)} bloco(s) de mensagem.",
         campaign_id=campaign.id,
-        details={"message_blocks": len(blocks)},
+        details={
+            "message_blocks": len(blocks),
+            "media_blocks": sum(1 for block in blocks if block["media_type"]),
+        },
     )
 
     db.commit()
@@ -1592,6 +1675,51 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
         interval_mode=interval_mode,
         delivery_groups=delivery_groups,
         failed_deliveries=failed_deliveries,
+    )
+
+
+@app.get("/campaigns/{campaign_id}/steps/{step_id}/media")
+def campaign_step_media(
+    campaign_id: str,
+    step_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    auth = require_auth(request, db)
+
+    campaign = get_campaign(
+        db,
+        auth[2].id,
+        campaign_id,
+    )
+
+    step = db.scalar(
+        select(CampaignStep).where(
+            CampaignStep.id == step_id,
+            CampaignStep.campaign_id == campaign.id,
+        )
+    )
+
+    if not step or not step.media_data_base64 or not step.media_mime:
+        raise HTTPException(404, "Mídia não encontrada.")
+
+    try:
+        payload = base64.b64decode(step.media_data_base64, validate=True)
+    except ValueError:
+        raise HTTPException(500, "Mídia armazenada inválida.")
+
+    headers = {
+        "Cache-Control": "private, max-age=3600",
+    }
+
+    if step.media_type == "document":
+        safe_name = (step.media_filename or "documento.pdf").replace('"', "")
+        headers["Content-Disposition"] = f'attachment; filename="{safe_name}"'
+
+    return Response(
+        content=payload,
+        media_type=step.media_mime,
+        headers=headers,
     )
 
 
