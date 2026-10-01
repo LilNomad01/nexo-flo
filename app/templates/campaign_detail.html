@@ -177,6 +177,15 @@
 </div>
 {% endif %}
 
+{% if request.query_params.get('continued') %}
+<div class="alert success">
+  <strong>Campanha retomada de onde parou.</strong>
+  {{ request.query_params.get('continued') }}
+  envio(s) que ainda não tinham sido enviados voltaram para a fila.
+  Os já enviados não serão repetidos.
+</div>
+{% endif %}
+
 {% if request.query_params.get('retried') %}
 <div class="alert success">
   {{ request.query_params.get('retried') }}
@@ -395,12 +404,41 @@
 
     </section>
 
-    {% if failed_deliveries or cancelled_deliveries %}
+    {% if cancelled_deliveries %}
 
     <section class="card">
-      <h2>Reprocessar não enviados</h2>
+      <p class="eyebrow">Campanha cancelada</p>
+      <h2>Continuar campanha de onde parou</h2>
       <p class="muted">
-        Recoloque na fila somente mensagens que falharam ou foram canceladas.
+        A Nexo Flow vai recolocar na fila somente os contatos e blocos
+        que ainda não foram enviados. Tudo que já aparece como enviado,
+        entregue ou lido será mantido e não será disparado novamente.
+      </p>
+
+      <div class="confirm-summary">
+        <strong>
+          {{ cancelled_deliveries }} envio(s) cancelado(s) aguardando retomada
+        </strong>
+      </div>
+
+      <form
+        method="post"
+        action="/campaigns/{{ campaign.id }}/continue-unsent"
+      >
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+
+        <button class="primary full" type="submit">
+          CONTINUAR DE ONDE PAROU
+        </button>
+      </form>
+    </section>
+
+    {% elif failed_deliveries %}
+
+    <section class="card">
+      <h2>Reprocessar falhas</h2>
+      <p class="muted">
+        Recoloque na fila somente mensagens que falharam.
         O que já foi enviado não será duplicado.
       </p>
 
@@ -411,7 +449,7 @@
         <input type="hidden" name="csrf" value="{{ csrf }}">
 
         <button class="primary full" type="submit">
-          Tentar envios novamente
+          Tentar falhas novamente
         </button>
       </form>
     </section>
