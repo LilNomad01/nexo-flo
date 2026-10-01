@@ -247,6 +247,9 @@ class VercelBaileysProvider:
     async def connect(self) -> dict:
         return await self._call("connect", timeout=35)
 
+    async def disconnect(self) -> dict:
+        return await self._call("disconnect", timeout=25)
+
     async def check_number(self, number: str) -> bool:
         data = await self._call("check", {"numbers": [number.lstrip("+")]}, timeout=40)
         results = data.get("results") if isinstance(data.get("results"), list) else []
