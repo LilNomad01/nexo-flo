@@ -290,44 +290,57 @@ async function clearAuth(sessionId) {
 
 async function withSessionLock(sessionId, callback) {
   const client = await pool.connect()
-  const lockName = `baileys:${sessionId}`
+  // v2 intentionally changes the key so locks left behind by an older
+  // serverless invocation cannot keep the current queue blocked.
+  const lockName = `baileys:v2:${sessionId}`
   let locked = false
+  let transactionOpen = false
 
   try {
-    const deadline = Date.now() + 25_000
+    await client.query('BEGIN')
+    transactionOpen = true
+
+    const deadline = Date.now() + 8_000
 
     while (!locked && Date.now() < deadline) {
       const result = await client.query(
-        'SELECT pg_try_advisory_lock(hashtext($1)::bigint) AS locked',
+        'SELECT pg_try_advisory_xact_lock(hashtext($1)::bigint) AS locked',
         [lockName],
       )
 
       locked = result.rows[0]?.locked === true
 
       if (!locked) {
-        await new Promise(resolve => setTimeout(resolve, 450))
+        await new Promise(resolve => setTimeout(resolve, 350))
       }
     }
 
     if (!locked) {
       const error = new Error(
-        'A sessão Baileys ainda está ocupada. O envio será tentado novamente.'
+        'A sessão Baileys está ocupada com o envio anterior. Tentaremos novamente automaticamente.'
       )
       error.status = 429
       throw error
     }
 
-    return await callback()
-  } finally {
-    if (locked) {
+    const result = await callback()
+    await client.query('COMMIT')
+    transactionOpen = false
+    return result
+  } catch (error) {
+    if (transactionOpen) {
       try {
-        await client.query(
-          'SELECT pg_advisory_unlock(hashtext($1)::bigint)',
-          [lockName],
-        )
+        await client.query('ROLLBACK')
+      } catch {}
+      transactionOpen = false
+    }
+    throw error
+  } finally {
+    if (transactionOpen) {
+      try {
+        await client.query('ROLLBACK')
       } catch {}
     }
-
     client.release()
   }
 }
