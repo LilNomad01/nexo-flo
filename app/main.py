@@ -1351,7 +1351,6 @@ async def create_campaign(request: Request, db: Session = Depends(get_db)):
             raw_messages = [legacy_message]
 
     raw_delays = form.getlist("block_delay")
-    raw_media = form.getlist("message_media")
     blocks = []
 
     allowed_media = {
@@ -1377,7 +1376,7 @@ async def create_campaign(request: Request, db: Session = Depends(get_db)):
         return False
 
     for source_index, body in enumerate(raw_messages):
-        upload = raw_media[source_index] if source_index < len(raw_media) else None
+        upload = form.get(f"message_media_{source_index}")
         filename = str(getattr(upload, "filename", "") or "").strip()
         media_type = None
         media_mime = None
