@@ -117,6 +117,42 @@ class BaileysProvider:
             raise ProviderError("O gateway Baileys aceitou o envio sem retornar o ID da mensagem.")
         return str(message_id)
 
+    async def send_media(
+        self,
+        to: str,
+        body: str,
+        request_id: str,
+        media_type: str,
+        mime: str,
+        filename: str,
+        data_base64: str,
+    ) -> str:
+        payload = {
+            "to": to.lstrip("+"),
+            "text": body,
+            "requestId": request_id,
+            "media": {
+                "type": media_type,
+                "mime": mime,
+                "filename": filename,
+                "data": data_base64,
+            },
+        }
+        try:
+            async with httpx.AsyncClient(timeout=70) as client:
+                response = await client.post(
+                    f"{self.session_url}/messages",
+                    json=payload,
+                    headers=self.headers,
+                )
+        except httpx.RequestError as exc:
+            raise ProviderError("O gateway Baileys está indisponível.", "gateway_unavailable", True) from exc
+        data = self._decode(response)
+        message_id = data.get("id")
+        if not message_id:
+            raise ProviderError("O gateway Baileys aceitou a mídia sem retornar o ID da mensagem.")
+        return str(message_id)
+
     @staticmethod
     def connection(data: dict) -> BaileysConnection:
         status = str(data.get("status") or ("connected" if data.get("connected") else "disconnected")).lower()
@@ -260,6 +296,36 @@ class VercelBaileysProvider:
         message_id = data.get("id")
         if not message_id:
             raise ProviderError("O Baileys aceitou o envio sem retornar o ID da mensagem.")
+        return str(message_id)
+
+    async def send_media(
+        self,
+        to: str,
+        body: str,
+        request_id: str,
+        media_type: str,
+        mime: str,
+        filename: str,
+        data_base64: str,
+    ) -> str:
+        data = await self._call(
+            "messages",
+            {
+                "requestId": request_id,
+                "text": body,
+                "to": to.lstrip("+"),
+                "media": {
+                    "type": media_type,
+                    "mime": mime,
+                    "filename": filename,
+                    "data": data_base64,
+                },
+            },
+            timeout=80,
+        )
+        message_id = data.get("id")
+        if not message_id:
+            raise ProviderError("O Baileys aceitou a mídia sem retornar o ID da mensagem.")
         return str(message_id)
 
     connection = staticmethod(BaileysProvider.connection)
