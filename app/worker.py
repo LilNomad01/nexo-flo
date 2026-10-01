@@ -29,6 +29,28 @@ async def _dispatch(job_id: str) -> None:
             job.status = "failed"
             job.last_error = "Referência de mensagem, contato ou canal ausente."
             return
+
+        if number.status != "connected":
+            job.status = "failed"
+            job.last_error = "O canal de WhatsApp está desconectado ou indisponível."
+            if message:
+                message.status = "failed"
+                message.error_message = job.last_error
+            recipient = (
+                db.scalar(
+                    select(CampaignRecipient).where(
+                        CampaignRecipient.campaign_id == message.campaign_id,
+                        CampaignRecipient.contact_id == message.contact_id,
+                    )
+                )
+                if message and message.campaign_id
+                else None
+            )
+            if recipient:
+                recipient.status = "failed"
+                recipient.reason = job.last_error
+            return
+
         try:
             token = decrypt_secret(number.access_token_encrypted or "")
             if number.provider == "meta_cloud":
