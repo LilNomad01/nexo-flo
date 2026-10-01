@@ -500,12 +500,39 @@
             {% endif %}
 
 
-            <div class="whatsapp-message">{{ item.body
-              | replace('{{nome}}', 'Maria')
-              | replace('{{empresa}}', 'Clínica Exemplo')
-              | replace('{{telefone}}', '+55 11 99999-9999')
-              | replace('{{email}}', 'contato@empresa.com')
-            }}</div>
+            <div class="whatsapp-message">
+              {% if item.media_type == 'image' %}
+              <img
+                class="whatsapp-media-preview"
+                src="/campaigns/{{ campaign.id }}/steps/{{ item.id }}/media"
+                alt="{{ item.media_filename or 'Imagem da campanha' }}"
+              >
+              {% elif item.media_type == 'video' %}
+              <video
+                class="whatsapp-video-preview"
+                src="/campaigns/{{ campaign.id }}/steps/{{ item.id }}/media"
+                controls
+                preload="metadata"
+              ></video>
+              {% elif item.media_type == 'document' %}
+              <a
+                class="whatsapp-document-preview"
+                href="/campaigns/{{ campaign.id }}/steps/{{ item.id }}/media"
+              >
+                <i data-lucide="file-text"></i>
+                {{ item.media_filename or 'Documento PDF' }}
+              </a>
+              {% endif %}
+
+              {% if item.body %}
+              <div>{{ item.body
+                | replace('{{nome}}', 'Maria')
+                | replace('{{empresa}}', 'Clínica Exemplo')
+                | replace('{{telefone}}', '+55 11 99999-9999')
+                | replace('{{email}}', 'contato@empresa.com')
+              }}</div>
+              {% endif %}
+            </div>
 
           {% endfor %}
 
