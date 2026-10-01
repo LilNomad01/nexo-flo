@@ -35,9 +35,28 @@ async def _dispatch(job_id: str) -> None:
                 provider_id = await MetaProvider(token).send_text(number.phone_number_id, contact.phone_e164, message.body or "")
             elif number.provider == "uazapi":
                 provider = UazapiProvider(instance_token=token)
+
+                connection = UazapiProvider.connection(
+                    await provider.status()
+                )
+                if not connection.connected:
+                    raise ProviderError(
+                        "A conexão UAZAPI não está conectada ao WhatsApp.",
+                        "uazapi_not_connected",
+                        False,
+                    )
+
                 if not await provider.check_number(contact.phone_e164):
-                    raise ProviderError("O número do destinatário não está cadastrado no WhatsApp.", "recipient_not_on_whatsapp", False)
-                provider_id = await provider.send_text(contact.phone_e164, message.body or "")
+                    raise ProviderError(
+                        "O número do destinatário não está cadastrado no WhatsApp.",
+                        "recipient_not_on_whatsapp",
+                        False,
+                    )
+
+                provider_id = await provider.send_text(
+                    contact.phone_e164,
+                    message.body or "",
+                )
             elif number.provider == "baileys":
                 provider = (
                     VercelBaileysProvider(
@@ -100,6 +119,72 @@ async def _dispatch(job_id: str) -> None:
                     )
                 )
             )
+
+            uazapi_auth_error = (
+                number.provider == "uazapi"
+                and (
+                    getattr(exc, "code", "") in {
+                        "401",
+                        "invalid_stored_token",
+                        "uazapi_not_connected",
+                    }
+                    or any(
+                        marker in normalized_error
+                        for marker in (
+                            "unauthorized",
+                            "no active session",
+                            "não está conectada",
+                            "nao esta conectada",
+                            "token",
+                        )
+                    )
+                )
+            )
+
+            if uazapi_auth_error:
+                campaign = (
+                    db.get(Campaign, message.campaign_id)
+                    if message.campaign_id
+                    else None
+                )
+
+                number.status = "disconnected"
+
+                if campaign:
+                    campaign.status = "paused"
+
+                job.status = "paused"
+                job.available_at = datetime.now(timezone.utc) + timedelta(seconds=60)
+                message.status = "queued"
+
+                recipient = db.scalar(
+                    select(CampaignRecipient).where(
+                        CampaignRecipient.campaign_id == message.campaign_id,
+                        CampaignRecipient.contact_id == message.contact_id,
+                    )
+                )
+
+                if recipient:
+                    recipient.status = "queued"
+                    recipient.reason = (
+                        "Conexão UAZAPI inválida ou desconectada. Reconecte o canal."
+                    )
+
+                write_log(
+                    db,
+                    job.workspace_id,
+                    "warning",
+                    "connection",
+                    "uazapi.campaign_paused_auth",
+                    "Campanha pausada porque a conexão UAZAPI precisa ser reconectada.",
+                    provider="uazapi",
+                    campaign_id=message.campaign_id,
+                    contact_id=message.contact_id,
+                    message_id=message.id,
+                    details={"error": job.last_error},
+                )
+
+                return
 
             if baileys_auth_error:
                 campaign = (
