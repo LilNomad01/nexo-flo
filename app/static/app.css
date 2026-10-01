@@ -3269,3 +3269,54 @@ body {
     width: 100%;
   }
 }
+
+
+/* === LAST CSV QUICK SELECT === */
+
+.recent-csv-button {
+  min-height: 34px !important;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px !important;
+  border: 1px solid #d9d7ff;
+  border-radius: 10px !important;
+  background: linear-gradient(135deg, #f2f1ff, #f7f6ff);
+  color: #5659dc;
+  font-size: .68rem !important;
+  font-weight: 800;
+}
+
+.recent-csv-button:hover {
+  background: #ecebff;
+  border-color: #c9c7ff;
+}
+
+.recent-csv-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.recent-csv-button span {
+  min-width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #fff;
+  color: #595ce5;
+  font-size: .62rem;
+  box-shadow: inset 0 0 0 1px rgba(89,92,229,.1);
+}
+
+@media (max-width: 720px) {
+  .contact-picker-actions {
+    flex-wrap: wrap;
+  }
+
+  .recent-csv-button {
+    flex: 1 1 100% !important;
+    justify-content: center;
+  }
+}
