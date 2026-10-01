@@ -124,7 +124,7 @@
             </span>
             <input
               type="file"
-              name="message_media"
+              name="message_media_0"
               accept="image/jpeg,image/png,image/webp,video/mp4,application/pdf"
               data-media-input
             >
@@ -318,6 +318,11 @@
       const delayRow = block.querySelector('[data-delay-row]');
       const hiddenDelay = block.querySelector('[data-delay-input]');
       const visibleDelay = block.querySelector('[data-visible-delay]');
+      const mediaInput = block.querySelector('[data-media-input]');
+
+      if (mediaInput) {
+        mediaInput.name = 'message_media_' + index;
+      }
 
       if (index === 0) {
         delayRow.hidden = true;
@@ -350,7 +355,7 @@
         '<label class="campaign-media-upload">' +
           '<span class="campaign-media-paperclip">＋</span>' +
           '<span><strong>Adicionar mídia</strong><small>JPG, PNG, WEBP, MP4 ou PDF • até 2,5 MB</small></span>' +
-          '<input type="file" name="message_media" accept="image/jpeg,image/png,image/webp,video/mp4,application/pdf" data-media-input>' +
+          '<input type="file" name="message_media_new" accept="image/jpeg,image/png,image/webp,video/mp4,application/pdf" data-media-input>' +
         '</label>' +
         '<div class="campaign-media-selected" data-media-selected hidden>' +
           '<span data-media-name></span>' +
