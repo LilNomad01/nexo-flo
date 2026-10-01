@@ -3532,3 +3532,53 @@ body {
     width: 100%;
   }
 }
+
+
+/* === NEXO FLOW BRAND LOGO V5 === */
+
+.brand-logo-link {
+  padding: 0 20px !important;
+  gap: 0 !important;
+}
+
+.brand-logo {
+  display: block;
+  width: 154px;
+  height: auto;
+  max-height: 48px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.auth-promo-logo-wrap {
+  width: fit-content;
+  max-width: 240px;
+  padding: 8px 12px 8px 10px;
+  border: 1px solid rgba(255,255,255,.18);
+  border-radius: 16px;
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 10px 28px rgba(16,24,40,.12);
+  backdrop-filter: blur(10px);
+}
+
+.auth-brand-logo {
+  display: block;
+  width: 188px;
+  height: auto;
+}
+
+.auth-mobile-logo-wrap {
+  margin-bottom: 34px;
+}
+
+.auth-mobile-logo {
+  display: block;
+  width: 164px;
+  height: auto;
+}
+
+@media (max-width: 650px) {
+  .brand-logo {
+    width: 144px;
+  }
+}
