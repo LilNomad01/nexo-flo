@@ -1979,6 +1979,156 @@ async def campaign_process(campaign_id: str, request: Request, db: Session = Dep
     }
 
 
+@app.post("/campaigns/{campaign_id}/continue-unsent")
+async def campaign_continue_unsent(campaign_id: str, request: Request, db: Session = Depends(get_db)):
+    auth = require_auth(request, db)
+    await checked_form(request, auth[0])
+
+    campaign = get_campaign(
+        db,
+        auth[2].id,
+        campaign_id,
+    )
+
+    number = db.get(
+        WhatsAppNumber,
+        campaign.phone_number_id,
+    )
+
+    if not number or number.workspace_id != auth[2].id:
+        return RedirectResponse(
+            f"/campaigns/{campaign.id}?error=Canal+remetente+inválido",
+            status_code=303,
+        )
+
+    try:
+        if number.provider == "baileys":
+            connection = await sync_baileys_number(number)
+            if not connection.connected:
+                db.commit()
+                return RedirectResponse(
+                    f"/campaigns/{campaign.id}?error=Reconecte+o+Baileys+antes+de+continuar",
+                    status_code=303,
+                )
+        elif number.provider == "uazapi":
+            connection = await sync_uazapi_number(number)
+            if not connection.connected:
+                db.commit()
+                return RedirectResponse(
+                    f"/campaigns/{campaign.id}?error=Reconecte+o+UAZAPI+antes+de+continuar",
+                    status_code=303,
+                )
+    except ProviderError:
+        db.commit()
+        return RedirectResponse(
+            f"/campaigns/{campaign.id}?error=Reconecte+o+canal+antes+de+continuar",
+            status_code=303,
+        )
+
+    rows = db.execute(
+        select(OutboxJob, Message)
+        .join(
+            Message,
+            Message.id == OutboxJob.message_id,
+        )
+        .where(
+            Message.campaign_id == campaign.id,
+            Message.status.notin_(
+                ["sent", "delivered", "read"]
+            ),
+            OutboxJob.status.in_(
+                ["cancelled", "failed", "paused", "pending"]
+            ),
+        )
+        .order_by(
+            OutboxJob.available_at,
+            OutboxJob.created_at,
+        )
+    ).all()
+
+    if not rows:
+        return RedirectResponse(
+            f"/campaigns/{campaign.id}?error=Nenhum+envio+pendente+para+continuar",
+            status_code=303,
+        )
+
+    base_gap = max(
+        1.5,
+        60.0 / max(
+            1,
+            campaign.processing_rate,
+        ),
+    )
+
+    cursor = 0.0
+    touched_contacts = set()
+
+    for index, (job, message) in enumerate(rows):
+        if index > 0:
+            cursor += (
+                base_gap
+                + ((index * 7) % 9) / 10
+            )
+
+            if (
+                number.provider == "baileys"
+                and index % 10 == 0
+            ):
+                cursor += 12
+
+        job.status = "pending"
+        job.attempts = 0
+        job.available_at = (
+            now()
+            + timedelta(seconds=cursor)
+        )
+        job.locked_at = None
+        job.last_error = None
+
+        message.status = "queued"
+        message.error_message = None
+
+        touched_contacts.add(
+            message.contact_id
+        )
+
+    for contact_id in touched_contacts:
+        recipient = db.scalar(
+            select(CampaignRecipient).where(
+                CampaignRecipient.campaign_id == campaign.id,
+                CampaignRecipient.contact_id == contact_id,
+            )
+        )
+
+        if recipient:
+            recipient.status = "queued"
+            recipient.reason = None
+
+    campaign.status = "running"
+    campaign.completed_at = None
+
+    write_log(
+        db,
+        auth[2].id,
+        "info",
+        "campaign",
+        "campaign.continue_unsent",
+        f"{len(rows)} envio(s) não enviados recolocados na fila.",
+        campaign_id=campaign.id,
+        details={
+            "requeued": len(rows),
+            "contacts": len(touched_contacts),
+        },
+    )
+
+    db.commit()
+
+    return RedirectResponse(
+        f"/campaigns/{campaign.id}?continued={len(rows)}",
+        status_code=303,
+    )
+
+
 @app.post("/campaigns/{campaign_id}/retry-failed")
 async def campaign_retry_failed(campaign_id: str, request: Request, db: Session = Depends(get_db)):
     auth = require_auth(request, db)
