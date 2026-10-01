@@ -311,7 +311,11 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         "read": count(Message, Message.workspace_id == workspace_id, Message.status == "read"),
         "replied": count(Message, Message.workspace_id == workspace_id, Message.direction == "inbound"),
         "failed": count(Message, Message.workspace_id == workspace_id, Message.status == "failed"),
-        "numbers": count(WhatsAppNumber, WhatsAppNumber.workspace_id == workspace_id),
+        "numbers": count(
+            WhatsAppNumber,
+            WhatsAppNumber.workspace_id == workspace_id,
+            WhatsAppNumber.status != "removed",
+        ),
     }
     campaigns = db.scalars(select(Campaign).where(Campaign.workspace_id == workspace_id).order_by(Campaign.created_at.desc()).limit(8)).all()
     return page(request, "dashboard.html", auth, metrics=metrics, campaigns=campaigns)
@@ -702,9 +706,18 @@ async def create_list(request: Request, db: Session = Depends(get_db)):
 @app.get("/whatsapp", response_class=HTMLResponse)
 async def whatsapp_page(request: Request, db: Session = Depends(get_db)):
     auth = require_auth(request, db)
-    numbers = db.scalars(select(WhatsAppNumber).where(WhatsAppNumber.workspace_id == auth[2].id).order_by(WhatsAppNumber.created_at.desc())).all()
+    numbers = db.scalars(
+        select(WhatsAppNumber)
+        .where(
+            WhatsAppNumber.workspace_id == auth[2].id,
+            WhatsAppNumber.status != "removed",
+        )
+        .order_by(WhatsAppNumber.created_at.desc())
+    ).all()
     sync_errors = []
     for number in numbers:
+        if number.status == "disabled":
+            continue
         try:
             if number.provider == "uazapi":
                 await sync_uazapi_number(number)
@@ -729,6 +742,156 @@ async def whatsapp_page(request: Request, db: Session = Depends(get_db)):
         connected_uazapi=connected_uazapi,
         connected_baileys=connected_baileys,
         connected_meta=connected_meta,
+    )
+
+
+@app.post("/whatsapp/{number_id}/disconnect")
+async def disconnect_whatsapp_number(
+    number_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    auth = require_auth(request, db)
+    await checked_form(request, auth[0])
+
+    number = db.scalar(
+        select(WhatsAppNumber).where(
+            WhatsAppNumber.id == number_id,
+            WhatsAppNumber.workspace_id == auth[2].id,
+            WhatsAppNumber.status != "removed",
+        )
+    )
+
+    if not number:
+        raise HTTPException(404, "Canal não encontrado.")
+
+    provider_error = None
+
+    try:
+        if number.provider == "uazapi":
+            token = decrypt_secret(number.access_token_encrypted or "")
+            if token:
+                await UazapiProvider(instance_token=token).disconnect()
+
+        elif (
+            number.provider == "baileys"
+            and number.waba_id == "vercel-internal"
+        ):
+            await baileys_provider(number).disconnect()
+
+    except ProviderError as exc:
+        # Mesmo se o provedor externo estiver indisponível, o usuário pode
+        # desabilitar o canal dentro do Nexo Flow para impedir novos envios.
+        provider_error = str(exc)
+
+    running_campaigns = db.scalars(
+        select(Campaign).where(
+            Campaign.workspace_id == auth[2].id,
+            Campaign.phone_number_id == number.id,
+            Campaign.status == "running",
+        )
+    ).all()
+
+    for campaign in running_campaigns:
+        campaign.status = "paused"
+
+    number.status = "disabled"
+
+    write_log(
+        db,
+        auth[2].id,
+        "warning" if provider_error else "info",
+        "connection",
+        "whatsapp.disconnected",
+        (
+            "Canal desativado no Nexo Flow; o provedor externo não confirmou a desconexão."
+            if provider_error
+            else "Canal desconectado pelo usuário."
+        ),
+        provider=number.provider,
+        details={
+            "number_id": number.id,
+            "provider_error": provider_error,
+            "paused_campaigns": len(running_campaigns),
+        },
+    )
+
+    db.commit()
+
+    if provider_error:
+        return RedirectResponse(
+            "/whatsapp?disconnected=local",
+            status_code=303,
+        )
+
+    return RedirectResponse(
+        "/whatsapp?disconnected=1",
+        status_code=303,
+    )
+
+
+@app.post("/whatsapp/{number_id}/delete")
+async def delete_whatsapp_number(
+    number_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    auth = require_auth(request, db)
+    await checked_form(request, auth[0])
+
+    number = db.scalar(
+        select(WhatsAppNumber).where(
+            WhatsAppNumber.id == number_id,
+            WhatsAppNumber.workspace_id == auth[2].id,
+            WhatsAppNumber.status != "removed",
+        )
+    )
+
+    if not number:
+        raise HTTPException(404, "Canal não encontrado.")
+
+    original_provider = number.provider
+    original_name = number.display_name
+
+    running_campaigns = db.scalars(
+        select(Campaign).where(
+            Campaign.workspace_id == auth[2].id,
+            Campaign.phone_number_id == number.id,
+            Campaign.status == "running",
+        )
+    ).all()
+
+    for campaign in running_campaigns:
+        campaign.status = "paused"
+
+    # Remoção lógica: preserva campanhas, mensagens e conversas antigas,
+    # mas retira o canal da interface e invalida suas credenciais.
+    number.status = "removed"
+    number.access_token_encrypted = None
+    number.webhook_secret = None
+    number.quality_rating = None
+    number.waba_id = None
+    number.phone_number_id = f"removed-{number.id}"
+
+    write_log(
+        db,
+        auth[2].id,
+        "info",
+        "connection",
+        "whatsapp.removed",
+        f'Canal "{original_name}" removido do Nexo Flow.',
+        provider=original_provider,
+        details={
+            "number_id": number.id,
+            "paused_campaigns": len(running_campaigns),
+        },
+    )
+
+    db.commit()
+
+    return RedirectResponse(
+        "/whatsapp?deleted=1",
+        status_code=303,
     )
 
 
@@ -1048,7 +1211,12 @@ async def baileys_reconnect(number_id: str, request: Request, db: Session = Depe
 @app.get("/whatsapp/webhooks", response_class=HTMLResponse)
 async def webhooks_page(request: Request, db: Session = Depends(get_db)):
     auth = require_auth(request, db)
-    numbers = db.scalars(select(WhatsAppNumber).where(WhatsAppNumber.workspace_id == auth[2].id)).all()
+    numbers = db.scalars(
+        select(WhatsAppNumber).where(
+            WhatsAppNumber.workspace_id == auth[2].id,
+            WhatsAppNumber.status.notin_(["disabled", "removed"]),
+        )
+    ).all()
     for number in numbers:
         try:
             if number.provider == "uazapi":
@@ -1101,6 +1269,7 @@ async def campaign_new_page(request: Request, db: Session = Depends(get_db)):
         select(WhatsAppNumber).where(
             WhatsAppNumber.workspace_id == auth[2].id,
             WhatsAppNumber.provider.in_(["uazapi", "baileys"]),
+            WhatsAppNumber.status.notin_(["disabled", "removed"]),
         )
     ).all()
     for number in external_numbers:
