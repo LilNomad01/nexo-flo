@@ -99,9 +99,23 @@
           </div>
 
           <div class="contact-picker-actions">
+            {% if last_csv_ids %}
+            <button
+              class="recent-csv-button mini-button"
+              type="button"
+              id="select-last-csv"
+              title="{{ last_csv_name or 'Última importação CSV' }}"
+            >
+              <i data-lucide="file-spreadsheet"></i>
+              Último CSV
+              <span>{{ last_csv_ids|length }}</span>
+            </button>
+            {% endif %}
+
             <button class="secondary mini-button" type="button" id="select-visible">
               Selecionar visíveis
             </button>
+
             <button class="ghost-action mini-button" type="button" id="clear-selection">
               Limpar
             </button>
@@ -277,6 +291,8 @@
   const checkboxes = Array.from(document.querySelectorAll('.contact-picker-checkbox'));
   const selectVisible = document.getElementById('select-visible');
   const clearSelection = document.getElementById('clear-selection');
+  const selectLastCsv = document.getElementById('select-last-csv');
+  const lastCsvIds = new Set({{ (last_csv_ids or []) | tojson }});
   const selectedCounter = document.getElementById('selected-counter');
   const selectedFooterCount = document.getElementById('selected-footer-count');
   const contactEmpty = document.getElementById('list-contact-empty');
@@ -346,6 +362,27 @@
     });
 
     updateSelectedState();
+  });
+
+  selectLastCsv?.addEventListener('click', () => {
+    checkboxes.forEach(input => {
+      input.checked = lastCsvIds.has(input.value);
+    });
+
+    updateSelectedState();
+
+    if (contactSearch) {
+      contactSearch.value = '';
+      filterContacts();
+    }
+
+    const firstSelected =
+      document.querySelector('.contact-picker-item.selected');
+
+    firstSelected?.scrollIntoView({
+      block: 'nearest',
+      behavior: 'smooth'
+    });
   });
 
   clearSelection?.addEventListener('click', () => {
