@@ -127,10 +127,25 @@ def page(request: Request, name: str, auth=None, **context):
 async def sync_uazapi_number(number: WhatsAppNumber) -> UazapiConnection:
     token = decrypt_secret(number.access_token_encrypted or "")
     if not token:
-        raise ProviderError("O token cifrado desta instância não pôde ser recuperado.", "invalid_stored_token", False)
-    connection = UazapiProvider.connection(await UazapiProvider(instance_token=token).status())
+        number.status = "disconnected"
+        raise ProviderError(
+            "O token desta conexão UAZAPI não pôde ser recuperado. Reconecte ou crie uma nova instância.",
+            "invalid_stored_token",
+            False,
+        )
+    try:
+        connection = UazapiProvider.connection(
+            await UazapiProvider(instance_token=token).status()
+        )
+    except ProviderError:
+        # Nunca mantenha um canal como "connected" depois de uma falha real de
+        # autenticação/status. Isso evitava conexões antigas aparecerem em campanhas.
+        number.status = "disconnected"
+        raise
     if connection.status in {"connected", "connecting", "disconnected", "hibernated"}:
         number.status = connection.status
+    else:
+        number.status = "connected" if connection.connected else "disconnected"
     if connection.connected:
         number.status = "connected"
     if connection.phone:
@@ -1029,6 +1044,12 @@ async def create_campaign(request: Request, db: Session = Depends(get_db)):
     if not contact_list or not number:
         raise HTTPException(400, "Lista ou canal inválido.")
 
+    if number.status != "connected":
+        raise HTTPException(
+            409,
+            "Este canal não está conectado. Atualize a conexão antes de criar a campanha.",
+        )
+
     try:
         rate = int(form.get("processing_rate", 20))
     except (TypeError, ValueError):
@@ -1305,6 +1326,60 @@ async def campaign_start(campaign_id: str, request: Request, db: Session = Depen
             400,
             "Confirmação inválida.",
         )
+
+    number = db.get(
+        WhatsAppNumber,
+        campaign.phone_number_id,
+    )
+
+    if not number or number.workspace_id != auth[2].id:
+        raise HTTPException(400, "Canal remetente inválido.")
+
+    if number.provider == "uazapi":
+        try:
+            connection = await sync_uazapi_number(number)
+        except ProviderError as exc:
+            db.commit()
+            error_message = (
+                "A conexão UAZAPI selecionada não está autorizada. "
+                "Reconecte o canal ou escolha outra conexão válida."
+            )
+            if "application/json" in request.headers.get("accept", ""):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "status": "draft",
+                        "error": error_message,
+                        "detail": str(exc),
+                        "reconnect_url": f"/whatsapp/uazapi/{number.id}",
+                    },
+                    status_code=409,
+                )
+            return RedirectResponse(
+                f"/campaigns/{campaign.id}?error=Reconecte+o+canal+UAZAPI",
+                status_code=303,
+            )
+
+        if not connection.connected:
+            number.status = "disconnected"
+            db.commit()
+            error_message = (
+                "A conexão UAZAPI selecionada não está conectada ao WhatsApp."
+            )
+            if "application/json" in request.headers.get("accept", ""):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "status": "draft",
+                        "error": error_message,
+                        "reconnect_url": f"/whatsapp/uazapi/{number.id}",
+                    },
+                    status_code=409,
+                )
+            return RedirectResponse(
+                f"/campaigns/{campaign.id}?error=Canal+UAZAPI+desconectado",
+                status_code=303,
+            )
 
     created = enqueue_campaign(
         db,
