@@ -30,6 +30,41 @@ async def _dispatch(job_id: str) -> None:
             job.last_error = "Referência de mensagem, contato ou canal ausente."
             return
 
+        campaign = (
+            db.get(Campaign, message.campaign_id)
+            if message.campaign_id
+            else None
+        )
+
+        # O job pode ter sido retirado da fila alguns instantes antes de o
+        # usuário clicar em Pausar. Revalida o estado imediatamente antes do
+        # envio para impedir que uma requisição antiga continue disparando.
+        if campaign and campaign.status != "running":
+            job.status = (
+                "paused"
+                if campaign.status == "paused"
+                else "cancelled"
+            )
+            job.locked_at = None
+            message.status = "queued"
+
+            recipient = db.scalar(
+                select(CampaignRecipient).where(
+                    CampaignRecipient.campaign_id == message.campaign_id,
+                    CampaignRecipient.contact_id == message.contact_id,
+                )
+            )
+
+            if recipient:
+                recipient.status = job.status
+                recipient.reason = (
+                    "Campanha pausada."
+                    if job.status == "paused"
+                    else "Campanha cancelada."
+                )
+
+            return
+
         if number.status != "connected":
             job.status = "failed"
             job.last_error = "O canal de WhatsApp está desconectado ou indisponível."
