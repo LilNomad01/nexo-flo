@@ -592,6 +592,11 @@ async function handleAction(action, sessionId, body) {
           body.text || ''
         ).trim()
 
+        const media =
+          body.media && typeof body.media === 'object'
+            ? body.media
+            : null
+
         if (!to) {
           const error = new Error(
             'Número do destinatário inválido.'
@@ -600,7 +605,7 @@ async function handleAction(action, sessionId, body) {
           throw error
         }
 
-        if (!text) {
+        if (!text && !media) {
           const error = new Error(
             'A mensagem está vazia.'
           )
@@ -619,10 +624,84 @@ async function handleAction(action, sessionId, body) {
           throw error
         }
 
+        let content
+
+        if (media) {
+          const mediaType = String(media.type || '')
+          const mime = String(media.mime || '')
+          const filename = String(media.filename || 'arquivo').slice(0, 220)
+          const rawData = String(media.data || '')
+
+          const allowedTypes = new Set([
+            'image',
+            'video',
+            'document',
+          ])
+
+          const allowedMime = new Set([
+            'image/jpeg',
+            'image/png',
+            'image/webp',
+            'video/mp4',
+            'application/pdf',
+          ])
+
+          if (!allowedTypes.has(mediaType) || !allowedMime.has(mime)) {
+            const error = new Error(
+              'Formato de mídia não suportado.'
+            )
+            error.status = 422
+            throw error
+          }
+
+          let mediaBuffer
+
+          try {
+            mediaBuffer = Buffer.from(rawData, 'base64')
+          } catch {
+            const error = new Error(
+              'Mídia inválida.'
+            )
+            error.status = 422
+            throw error
+          }
+
+          if (!mediaBuffer.length || mediaBuffer.length > 2500000) {
+            const error = new Error(
+              'A mídia precisa ter até 2,5 MB.'
+            )
+            error.status = 422
+            throw error
+          }
+
+          if (mediaType === 'image') {
+            content = {
+              image: mediaBuffer,
+              mimetype: mime,
+              caption: text || undefined,
+            }
+          } else if (mediaType === 'video') {
+            content = {
+              video: mediaBuffer,
+              mimetype: mime,
+              caption: text || undefined,
+            }
+          } else {
+            content = {
+              document: mediaBuffer,
+              mimetype: mime,
+              fileName: filename || 'documento.pdf',
+              caption: text || undefined,
+            }
+          }
+        } else {
+          content = { text }
+        }
+
         const sent =
           await handle.sock.sendMessage(
             checked.jid,
-            { text },
+            content,
           )
 
         const messageId =
