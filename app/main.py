@@ -663,8 +663,9 @@ def lists_page(request: Request, db: Session = Depends(get_db)):
             last_csv_ids = list(
                 db.scalars(
                     select(ListContact.contact_id)
+                    .join(Contact, Contact.id == ListContact.contact_id)
                     .where(ListContact.list_id == latest_import_list.id)
-                    .order_by(ListContact.created_at)
+                    .order_by(Contact.created_at.desc())
                 ).all()
             )
             last_csv_name = latest_import_list.name
