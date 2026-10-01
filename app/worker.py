@@ -227,6 +227,53 @@ async def _dispatch(job_id: str) -> None:
                 )
             )
 
+            baileys_busy = (
+                number.provider == "baileys"
+                and (
+                    getattr(exc, "code", "") == "429"
+                    or "sessão baileys está ocupada" in normalized_error
+                    or "sessao baileys esta ocupada" in normalized_error
+                    or "envio anterior" in normalized_error
+                )
+            )
+
+            if baileys_busy:
+                # Disputa interna entre chamadas serverless não deve consumir
+                # tentativa do contato nem virar falha. Apenas devolve o job
+                # para a fila por alguns segundos.
+                job.status = "pending"
+                job.attempts = max(0, (job.attempts or 1) - 1)
+                job.locked_at = None
+                job.available_at = datetime.now(timezone.utc) + timedelta(seconds=3)
+                job.last_error = None
+                message.status = "queued"
+                message.error_message = None
+
+                recipient = db.scalar(
+                    select(CampaignRecipient).where(
+                        CampaignRecipient.campaign_id == message.campaign_id,
+                        CampaignRecipient.contact_id == message.contact_id,
+                    )
+                )
+
+                if recipient:
+                    recipient.status = "queued"
+                    recipient.reason = None
+
+                write_log(
+                    db,
+                    job.workspace_id,
+                    "warning",
+                    "dispatch",
+                    "baileys.busy_retry",
+                    "Sessão Baileys ocupada; envio devolvido para a fila.",
+                    provider="baileys",
+                    campaign_id=message.campaign_id,
+                    contact_id=message.contact_id,
+                    message_id=message.id,
+                )
+                return
+
             if uazapi_auth_error:
                 campaign = (
                     db.get(Campaign, message.campaign_id)
