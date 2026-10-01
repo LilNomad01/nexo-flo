@@ -299,7 +299,10 @@ async def _dispatch(job_id: str) -> None:
             write_log(db, job.workspace_id, level, "dispatch", event, str(exc), provider=number.provider, campaign_id=message.campaign_id, contact_id=message.contact_id, message_id=message.id, details={"attempt": job.attempts, "retryable": retryable})
 
 
-def _next_job(workspace_id: Optional[str] = None) -> str:
+def _next_job(
+    workspace_id: Optional[str] = None,
+    campaign_id: Optional[str] = None,
+) -> str:
     with session_scope() as db:
         query = (
             select(OutboxJob)
@@ -313,6 +316,8 @@ def _next_job(workspace_id: Optional[str] = None) -> str:
         )
         if workspace_id:
             query = query.where(OutboxJob.workspace_id == workspace_id)
+        if campaign_id:
+            query = query.where(Campaign.id == campaign_id)
         job = db.scalar(query.order_by(OutboxJob.available_at, OutboxJob.created_at).limit(1).with_for_update(skip_locked=True))
         if not job:
             return ""
@@ -337,8 +342,21 @@ def _complete_campaigns() -> None:
                     .join(Message, Message.id == OutboxJob.message_id)
                     .where(Message.campaign_id == campaign.id, OutboxJob.status == "failed")
                 ) or 0
-                campaign.status = "failed" if failed else "completed"
+                cancelled = db.scalar(
+                    select(func.count(OutboxJob.id))
+                    .join(Message, Message.id == OutboxJob.message_id)
+                    .where(Message.campaign_id == campaign.id, OutboxJob.status == "cancelled")
+                ) or 0
+
+                if failed:
+                    campaign.status = "failed"
+                elif cancelled:
+                    campaign.status = "cancelled"
+                else:
+                    campaign.status = "completed"
+
                 campaign.completed_at = datetime.now(timezone.utc)
+
                 if failed:
                     write_log(
                         db,
@@ -349,15 +367,33 @@ def _complete_campaigns() -> None:
                         f"Campanha finalizada com {failed} falha(s).",
                         campaign_id=campaign.id,
                     )
+                elif cancelled:
+                    write_log(
+                        db,
+                        campaign.workspace_id,
+                        "warning",
+                        "campaign",
+                        "campaign.cancelled_jobs",
+                        f"Campanha possui {cancelled} envio(s) cancelado(s).",
+                        campaign_id=campaign.id,
+                    )
                 else:
                     write_log(db, campaign.workspace_id, "success", "campaign", "campaign.completed", "Campanha concluída.", campaign_id=campaign.id)
 
 
-async def process_available_jobs(workspace_id: str, max_jobs: int = 1) -> int:
+async def process_available_jobs(
+    workspace_id: str,
+    campaign_id: Optional[str] = None,
+    max_jobs: int = 1,
+) -> int:
     """Processa um lote curto, adequado a uma requisição serverless autenticada."""
     processed = 0
     for _ in range(max(1, min(max_jobs, 10))):
-        job_id = await asyncio.to_thread(_next_job, workspace_id)
+        job_id = await asyncio.to_thread(
+            _next_job,
+            workspace_id,
+            campaign_id,
+        )
         if not job_id:
             break
         await _dispatch(job_id)
