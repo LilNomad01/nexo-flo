@@ -2357,7 +2357,7 @@ async def campaign_control(campaign_id: str, operation: str, request: Request, d
             .where(
                 Message.campaign_id == campaign.id,
                 OutboxJob.status.in_(
-                    ["pending", "paused"]
+                    ["pending", "paused", "processing"]
                 ),
             )
             .order_by(
@@ -2365,6 +2365,21 @@ async def campaign_control(campaign_id: str, operation: str, request: Request, d
                 OutboxJob.created_at,
             )
         ).all()
+
+        # Se uma função serverless morreu enquanto o job estava como
+        # "processing", ele poderia ficar preso para sempre. Na retomada,
+        # recupera apenas processing antigos; um envio realmente em andamento
+        # continua protegido.
+        stale_before = now() - timedelta(seconds=90)
+        jobs = [
+            job
+            for job in jobs
+            if (
+                job.status != "processing"
+                or not job.locked_at
+                or job.locked_at <= stale_before
+            )
+        ]
 
         base_gap = max(
             1.5,
