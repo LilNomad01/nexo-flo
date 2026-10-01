@@ -34,6 +34,35 @@ function secureEqual(left, right) {
   return timingSafeEqual(leftHash, rightHash)
 }
 
+function firstHttpUrl(value) {
+  const match = String(value || '').match(/https?:\/\/[^\s<>"']+/i)
+  return match ? match[0].replace(/[),.!?;:]+$/, '') : null
+}
+
+function linkPreviewFor(url) {
+  if (!url) return undefined
+
+  let title = 'Abrir link'
+  let description = 'Toque para abrir.'
+
+  try {
+    const parsed = new URL(url)
+    title = parsed.hostname.replace(/^www\./, '')
+    if (parsed.hostname === 'chat.whatsapp.com') {
+      title = 'Convite para grupo do WhatsApp'
+      description = 'Toque para abrir o convite.'
+    }
+  } catch {}
+
+  return {
+    'matched-text': url,
+    'canonical-url': url,
+    title,
+    description,
+    previewType: 0,
+  }
+}
+
 function authorized(request) {
   const value = request.headers.authorization || ''
   return value.startsWith('Bearer ') && secureEqual(value.slice(7), apiToken)
@@ -259,7 +288,13 @@ async function route(request, response) {
     if (entry.sent[requestId]) return sendJson(response, 200, { id: entry.sent[requestId], duplicate: true })
     const [checked] = await entry.sock.onWhatsApp(to)
     if (!checked?.exists) throw new HttpError(422, 'O número do destinatário não está cadastrado no WhatsApp.')
-    const sent = await entry.sock.sendMessage(checked.jid, { text })
+    const url = firstHttpUrl(text)
+    const sent = await entry.sock.sendMessage(
+      checked.jid,
+      url
+        ? { text, linkPreview: linkPreviewFor(url) }
+        : { text },
+    )
     const messageId = sent?.key?.id
     if (!messageId) throw new HttpError(502, 'O WhatsApp não retornou o ID da mensagem.')
     entry.sent[requestId] = messageId
