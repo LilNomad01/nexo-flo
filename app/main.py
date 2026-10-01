@@ -852,6 +852,23 @@ async def delete_whatsapp_number(
 
     original_provider = number.provider
     original_name = number.display_name
+    provider_error = None
+
+    try:
+        if number.provider == "uazapi":
+            token = decrypt_secret(number.access_token_encrypted or "")
+            if token:
+                await UazapiProvider(instance_token=token).disconnect()
+
+        elif (
+            number.provider == "baileys"
+            and number.waba_id == "vercel-internal"
+        ):
+            await baileys_provider(number).disconnect()
+
+    except ProviderError as exc:
+        # A remoção local continua para permitir limpar conexões quebradas.
+        provider_error = str(exc)
 
     running_campaigns = db.scalars(
         select(Campaign).where(
@@ -876,14 +893,19 @@ async def delete_whatsapp_number(
     write_log(
         db,
         auth[2].id,
-        "info",
+        "warning" if provider_error else "info",
         "connection",
         "whatsapp.removed",
-        f'Canal "{original_name}" removido do Nexo Flow.',
+        (
+            f'Canal "{original_name}" removido do Nexo Flow, mas o provedor externo não confirmou a desconexão.'
+            if provider_error
+            else f'Canal "{original_name}" removido do Nexo Flow.'
+        ),
         provider=original_provider,
         details={
             "number_id": number.id,
             "paused_campaigns": len(running_campaigns),
+            "provider_error": provider_error,
         },
     )
 
