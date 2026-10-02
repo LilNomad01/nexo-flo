@@ -177,6 +177,32 @@ async def sync_baileys_number(number: WhatsAppNumber) -> BaileysConnection:
     return connection
 
 
+async def kick_baileys_campaign(
+    number: WhatsAppNumber,
+    campaign: Campaign,
+    workspace_id: str,
+) -> bool:
+    if (
+        number.provider != "baileys"
+        or number.waba_id != "vercel-internal"
+        or number.status != "connected"
+        or campaign.status != "running"
+    ):
+        return False
+
+    provider = baileys_provider(number)
+
+    if not isinstance(provider, VercelBaileysProvider):
+        return False
+
+    await provider.start_campaign_drain(
+        campaign.id,
+        workspace_id,
+    )
+
+    return True
+
+
 def anonymous_page(request: Request, name: str, **context):
     token, signed = new_anonymous_csrf()
     response = page(request, name, csrf=token, **context)
@@ -1348,6 +1374,12 @@ async def create_campaign(request: Request, db: Session = Depends(get_db)):
     )
     rate = max(1, min(rate, rate_limit))
 
+    if (
+        number.provider == "baileys"
+        and number.waba_id == "vercel-internal"
+    ):
+        rate = settings.baileys_max_messages_per_minute
+
     raw_messages = [str(value).strip() for value in form.getlist("message_block")]
 
     if not raw_messages:
@@ -1848,6 +1880,30 @@ async def campaign_start(campaign_id: str, request: Request, db: Session = Depen
 
     db.commit()
 
+    if (
+        number.provider == "baileys"
+        and number.waba_id == "vercel-internal"
+    ):
+        try:
+            await kick_baileys_campaign(
+                number,
+                campaign,
+                auth[2].id,
+            )
+        except ProviderError as exc:
+            write_log(
+                db,
+                auth[2].id,
+                "warning",
+                "dispatch",
+                "baileys.worker_kick_failed",
+                "A campanha foi iniciada, mas o worker Baileys precisará ser reativado automaticamente.",
+                provider="baileys",
+                campaign_id=campaign.id,
+                details={"error": str(exc)},
+            )
+            db.commit()
+
     if "application/json" in request.headers.get("accept", ""):
         return {
             "ok": True,
@@ -1880,13 +1936,34 @@ async def campaign_process(campaign_id: str, request: Request, db: Session = Dep
             campaign.phone_number_id,
         )
 
-        processed = await process_available_jobs(
-            auth[2].id,
-            campaign.id,
-            # Baileys abre uma sessão por envio nesta arquitetura.
-            # Lotes grandes ultrapassam o timeout serverless de 60s.
-            max_jobs=2 if number and number.provider == "baileys" else 2,
-        )
+        if (
+            number
+            and number.provider == "baileys"
+            and number.waba_id == "vercel-internal"
+        ):
+            if (
+                campaign.processing_rate
+                < settings.baileys_max_messages_per_minute
+            ):
+                campaign.processing_rate = (
+                    settings.baileys_max_messages_per_minute
+                )
+                db.commit()
+
+            try:
+                await kick_baileys_campaign(
+                    number,
+                    campaign,
+                    auth[2].id,
+                )
+            except ProviderError:
+                pass
+        else:
+            processed = await process_available_jobs(
+                auth[2].id,
+                campaign.id,
+                max_jobs=2,
+            )
 
     db.expire_all()
 
@@ -2122,6 +2199,19 @@ async def campaign_continue_unsent(campaign_id: str, request: Request, db: Sessi
 
     db.commit()
 
+    if (
+        number.provider == "baileys"
+        and number.waba_id == "vercel-internal"
+    ):
+        try:
+            await kick_baileys_campaign(
+                number,
+                campaign,
+                auth[2].id,
+            )
+        except ProviderError:
+            pass
+
     return RedirectResponse(
         f"/campaigns/{campaign.id}?continued={len(rows)}",
         status_code=303,
@@ -2163,6 +2253,27 @@ async def campaign_retry_failed(campaign_id: str, request: Request, db: Session 
         campaign.completed_at = None
         write_log(db, auth[2].id, "info", "campaign", "campaign.retry_failed", f"{len(rows)} envio(s) recolocado(s) na fila.", campaign_id=campaign.id)
     db.commit()
+
+    number = db.get(
+        WhatsAppNumber,
+        campaign.phone_number_id,
+    )
+
+    if (
+        rows
+        and number
+        and number.provider == "baileys"
+        and number.waba_id == "vercel-internal"
+    ):
+        try:
+            await kick_baileys_campaign(
+                number,
+                campaign,
+                auth[2].id,
+            )
+        except ProviderError:
+            pass
+
     return RedirectResponse(f"/campaigns/{campaign.id}?retried={len(rows)}", status_code=303)
 
 
@@ -2472,6 +2583,21 @@ async def campaign_control(campaign_id: str, operation: str, request: Request, d
     )
 
     db.commit()
+
+    if (
+        operation == "resume"
+        and number
+        and number.provider == "baileys"
+        and number.waba_id == "vercel-internal"
+    ):
+        try:
+            await kick_baileys_campaign(
+                number,
+                campaign,
+                auth[2].id,
+            )
+        except ProviderError:
+            pass
 
     payload = {
         "ok": True,
