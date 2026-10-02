@@ -874,7 +874,7 @@
 
     if (status === 'running') {
       stopped = false;
-      schedule(300);
+      schedule(150);
     } else {
       clearTimeout(timer);
     }
@@ -977,7 +977,7 @@
       processing
       || status !== 'running'
     ) {
-      schedule(2500);
+      schedule(500);
       return;
     }
 
@@ -1058,7 +1058,7 @@
       if (
         status === 'running'
       ) {
-        schedule(3000);
+        schedule(500);
       }
 
     }
@@ -1312,7 +1312,7 @@
         !document.hidden
         && status === 'running'
       ) {
-        schedule(200);
+        schedule(100);
       }
 
     }
