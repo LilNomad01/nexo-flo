@@ -185,7 +185,7 @@ async def kick_baileys_campaign(
     if (
         number.provider != "baileys"
         or number.waba_id != "vercel-internal"
-        or number.status != "connected"
+        or number.status in {"disabled", "removed"}
         or campaign.status != "running"
     ):
         return False
@@ -1813,7 +1813,14 @@ async def campaign_switch_channel(
         )
 
     try:
-        if target.provider == "baileys":
+        if (
+            target.provider == "baileys"
+            and target.waba_id == "vercel-internal"
+        ):
+            # O worker valida a sessão real ao abrir o socket.
+            # Não bloqueia por snapshot serverless momentaneamente desatualizado.
+            target.status = "connected"
+        elif target.provider == "baileys":
             connection = await sync_baileys_number(
                 target
             )
@@ -2678,7 +2685,11 @@ async def campaign_control(campaign_id: str, operation: str, request: Request, d
     )
 
     if operation == "resume":
-        if number and number.provider == "baileys":
+        if (
+            number
+            and number.provider == "baileys"
+            and number.waba_id != "vercel-internal"
+        ):
             try:
                 connection = BaileysProvider.connection(
                     await baileys_provider(number).status()
@@ -2737,6 +2748,19 @@ async def campaign_control(campaign_id: str, operation: str, request: Request, d
                     f"/campaigns/{campaign.id}?error=Reconecte+o+Baileys",
                     status_code=303,
                 )
+
+        # No Baileys interno/serverless, o snapshot de status pode ficar
+        # temporariamente "connecting" mesmo com credenciais válidas.
+        # O worker abre o socket e valida a sessão real ao retomar.
+        if (
+            number
+            and number.provider == "baileys"
+            and number.waba_id == "vercel-internal"
+        ):
+            number.status = "connected"
+            campaign.processing_rate = (
+                settings.baileys_max_messages_per_minute
+            )
 
         campaign.status = "running"
 
