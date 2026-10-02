@@ -78,7 +78,7 @@
         Canal remetente
         <select name="phone_number_id" required>
           {% for number in numbers %}
-          <option value="{{ number.id }}">
+          <option value="{{ number.id }}" data-provider="{{ number.provider }}">
             {{ number.display_name }} • {{ number.provider_label }} • {{ number.phone_e164 or 'telefone pendente' }}
           </option>
           {% endfor %}
@@ -173,13 +173,16 @@
     <label>
       Ritmo por minuto
       <input
+        id="processing-rate"
         type="number"
         name="processing_rate"
         min="1"
         max="{{ settings.max_messages_per_minute }}"
         value="20"
+        data-standard-max="{{ settings.max_messages_per_minute }}"
+        data-baileys-max="{{ settings.baileys_max_messages_per_minute }}"
       >
-      <small>
+      <small id="processing-rate-hint">
         Máximo interno: {{ settings.max_messages_per_minute }}/min.
         O intervalo dos blocos também é respeitado.
       </small>
@@ -207,6 +210,9 @@
   const container = document.getElementById('message-blocks');
   const addButton = document.getElementById('add-message-block');
   const preview = document.getElementById('preview-messages');
+  const channelSelect = document.querySelector('select[name="phone_number_id"]');
+  const rateInput = document.getElementById('processing-rate');
+  const rateHint = document.getElementById('processing-rate-hint');
 
   const open = '{' + '{';
   const close = '}' + '}';
@@ -230,6 +236,29 @@
   function clearPreviewUrls() {
     previewObjectUrls.forEach(url => URL.revokeObjectURL(url));
     previewObjectUrls = [];
+  }
+
+  function syncRateLimit() {
+    if (!channelSelect || !rateInput || !rateHint) return;
+
+    const option = channelSelect.options[channelSelect.selectedIndex];
+    const provider = option?.dataset?.provider || '';
+    const isBaileys = provider === 'baileys';
+    const limit = Number(
+      isBaileys
+        ? rateInput.dataset.baileysMax
+        : rateInput.dataset.standardMax
+    ) || 40;
+
+    rateInput.max = String(limit);
+
+    if (Number(rateInput.value) > limit) {
+      rateInput.value = String(limit);
+    }
+
+    rateHint.textContent = isBaileys
+      ? 'Modo rápido Baileys: até ' + limit + '/min.'
+      : 'Máximo interno: ' + limit + '/min. O intervalo dos blocos também é respeitado.';
   }
 
   function syncMediaState(block) {
@@ -458,6 +487,8 @@
     syncPreview();
   });
 
+  channelSelect?.addEventListener('change', syncRateLimit);
+  syncRateLimit();
   syncBlocks();
 })();
 </script>
