@@ -170,6 +170,88 @@ function buildOutboundContent(textValue, mediaValue) {
 const sleep = milliseconds =>
   new Promise(resolve => setTimeout(resolve, milliseconds))
 
+async function claimCampaignDrainLease(
+  campaignId,
+  workspaceId,
+  sessionId,
+) {
+  await ensureSchema()
+
+  const result = await pool.query(
+    `
+    INSERT INTO baileys_campaign_drains (
+      campaign_id,
+      workspace_id,
+      session_id,
+      lease_until,
+      updated_at
+    )
+    VALUES (
+      $1,
+      $2,
+      $3,
+      now() + interval '280 seconds',
+      now()
+    )
+    ON CONFLICT (campaign_id)
+    DO UPDATE SET
+      workspace_id = EXCLUDED.workspace_id,
+      session_id = EXCLUDED.session_id,
+      lease_until = EXCLUDED.lease_until,
+      updated_at = now()
+    WHERE
+      baileys_campaign_drains.lease_until <= now()
+    RETURNING campaign_id
+    `,
+    [
+      campaignId,
+      workspaceId,
+      sessionId,
+    ],
+  )
+
+  return result.rowCount === 1
+}
+
+async function refreshCampaignDrainLease(
+  campaignId,
+  sessionId,
+) {
+  await pool.query(
+    `
+    UPDATE baileys_campaign_drains
+    SET
+      lease_until = now() + interval '280 seconds',
+      updated_at = now()
+    WHERE
+      campaign_id = $1
+      AND session_id = $2
+    `,
+    [
+      campaignId,
+      sessionId,
+    ],
+  )
+}
+
+async function releaseCampaignDrainLease(
+  campaignId,
+  sessionId,
+) {
+  await pool.query(
+    `
+    DELETE FROM baileys_campaign_drains
+    WHERE
+      campaign_id = $1
+      AND session_id = $2
+    `,
+    [
+      campaignId,
+      sessionId,
+    ],
+  )
+}
+
 async function claimCampaignBatch(
   campaignId,
   workspaceId,
@@ -725,6 +807,11 @@ async function runCampaignDrain(
             15,
           )
 
+          await refreshCampaignDrainLease(
+            campaignId,
+            sessionId,
+          )
+
           if (!rows.length) {
             const refreshed =
               await finishCampaignIfDone(
@@ -1015,6 +1102,13 @@ async function ensureSchema() {
         message_id varchar(220) NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now(),
         PRIMARY KEY (session_id, request_id)
+      );
+      CREATE TABLE IF NOT EXISTS baileys_campaign_drains (
+        campaign_id varchar(48) PRIMARY KEY,
+        workspace_id varchar(48) NOT NULL,
+        session_id varchar(80) NOT NULL,
+        lease_until timestamptz NOT NULL,
+        updated_at timestamptz NOT NULL DEFAULT now()
       );
     `)
   }
@@ -1520,6 +1614,21 @@ async function handleAction(action, sessionId, body, request) {
       throw error
     }
 
+    const claimed =
+      await claimCampaignDrainLease(
+        campaignId,
+        workspaceId,
+        sessionId,
+      )
+
+    if (!claimed) {
+      return {
+        started: false,
+        alreadyRunning: true,
+        campaignId,
+      }
+    }
+
     const host = String(
       request.headers.host || ''
     )
@@ -1531,6 +1640,8 @@ async function handleAction(action, sessionId, body, request) {
 
     waitUntil(
       (async () => {
+        let continueDrain = false
+
         try {
           const result =
             await runCampaignDrain(
@@ -1538,6 +1649,9 @@ async function handleAction(action, sessionId, body, request) {
               campaignId,
               workspaceId,
             )
+
+          continueDrain =
+            Boolean(result.hasMore)
 
           console.info(
             '[Baileys] campaign drain finished',
@@ -1552,17 +1666,6 @@ async function handleAction(action, sessionId, body, request) {
                 result.status,
             },
           )
-
-          if (result.hasMore) {
-            await sleep(500)
-
-            await triggerCampaignDrain(
-              baseUrl,
-              sessionId,
-              campaignId,
-              workspaceId,
-            )
-          }
         } catch (error) {
           const message =
             String(error || '')
@@ -1579,13 +1682,14 @@ async function handleAction(action, sessionId, body, request) {
           const normalized =
             message.toLowerCase()
 
-          if (
+          const authError =
             normalized.includes('pareada pelo qr')
             || normalized.includes('pareado pelo qr')
             || normalized.includes('logged out')
             || normalized.includes('sessão removida')
             || normalized.includes('sessao removida')
-          ) {
+
+          if (authError) {
             await pool.query(
               `
               UPDATE campaigns
@@ -1600,11 +1704,18 @@ async function handleAction(action, sessionId, body, request) {
                 workspaceId,
               ],
             )
-
-            return
+          } else {
+            continueDrain = true
           }
+        } finally {
+          await releaseCampaignDrainLease(
+            campaignId,
+            sessionId,
+          )
+        }
 
-          await sleep(2500)
+        if (continueDrain) {
+          await sleep(800)
 
           try {
             await triggerCampaignDrain(
@@ -1615,7 +1726,7 @@ async function handleAction(action, sessionId, body, request) {
             )
           } catch (retryError) {
             console.error(
-              '[Baileys] campaign drain retry failed',
+              '[Baileys] campaign drain continuation failed',
               {
                 sessionId,
                 campaignId,
@@ -1632,6 +1743,7 @@ async function handleAction(action, sessionId, body, request) {
 
     return {
       started: true,
+      alreadyRunning: false,
       campaignId,
     }
   }
