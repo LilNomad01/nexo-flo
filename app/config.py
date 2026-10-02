@@ -42,6 +42,7 @@ class Settings:
         self.whatsapp_app_secret = getenv("WHATSAPP_APP_SECRET", "")
         self.uazapi_server_url = getenv("UAZAPI_SERVER_URL", "https://free.uazapi.com").rstrip("/")
         self.max_messages_per_minute = _int("MAX_MESSAGES_PER_MINUTE", 40)
+        self.baileys_max_messages_per_minute = _int("BAILEYS_MAX_MESSAGES_PER_MINUTE", 120)
         self.max_messages_per_contact_7d = _int("MAX_MESSAGES_PER_CONTACT_7D", 2)
         self.failure_rate_pause_threshold = _float("FAILURE_RATE_PAUSE_THRESHOLD", 0.08)
         self.opt_out_rate_pause_threshold = _float("OPT_OUT_RATE_PAUSE_THRESHOLD", 0.02)
