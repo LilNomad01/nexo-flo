@@ -384,6 +384,9 @@ async function campaignState(
     `
     SELECT
       campaign.status,
+      number.phone_number_id AS session_id,
+      number.provider,
+      number.waba_id,
       COUNT(*) FILTER (
         WHERE job.status IN ('pending', 'processing')
       )::int AS pending,
@@ -397,6 +400,8 @@ async function campaignState(
         WHERE job.status = 'pending'
       ) AS next_available_at
     FROM campaigns AS campaign
+    LEFT JOIN whatsapp_phone_numbers AS number
+      ON number.id = campaign.phone_number_id
     LEFT JOIN messages AS message
       ON message.campaign_id = campaign.id
     LEFT JOIN outbox_jobs AS job
@@ -404,7 +409,12 @@ async function campaignState(
     WHERE
       campaign.id = $1
       AND campaign.workspace_id = $2
-    GROUP BY campaign.id, campaign.status
+    GROUP BY
+      campaign.id,
+      campaign.status,
+      number.phone_number_id,
+      number.provider,
+      number.waba_id
     `,
     [campaignId, workspaceId],
   )
@@ -800,6 +810,34 @@ async function runCampaignDrain(
             }
           }
 
+          if (
+            state.provider !== 'baileys'
+            || state.waba_id !== 'vercel-internal'
+            || state.session_id !== sessionId
+          ) {
+            await pool.query(
+              `
+              UPDATE outbox_jobs AS job
+              SET
+                status = 'pending',
+                locked_at = NULL,
+                available_at = now()
+              FROM messages AS message
+              WHERE
+                job.message_id = message.id
+                AND message.campaign_id = $1
+                AND job.status = 'processing'
+              `,
+              [campaignId],
+            )
+
+            return {
+              processed,
+              hasMore: false,
+              status: 'channel_changed',
+            }
+          }
+
           const rows = await claimCampaignBatch(
             campaignId,
             workspaceId,
@@ -933,6 +971,9 @@ async function runCampaignDrain(
             if (
               !current ||
               current.status !== 'running'
+              || current.provider !== 'baileys'
+              || current.waba_id !== 'vercel-internal'
+              || current.session_id !== sessionId
             ) {
               await pool.query(
                 `
@@ -946,7 +987,11 @@ async function runCampaignDrain(
                   row.job_id,
                   current?.status === 'paused'
                     ? 'paused'
-                    : 'cancelled',
+                    : (
+                        current?.status === 'running'
+                          ? 'pending'
+                          : 'cancelled'
+                      ),
                 ],
               )
 
