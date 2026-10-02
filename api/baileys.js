@@ -1429,6 +1429,18 @@ async function openSocket(sessionId, timeoutMs = 240_000, generationId = null) {
 
         if (!updated) return
 
+        await pool.query(
+          `
+          UPDATE whatsapp_phone_numbers
+          SET status = 'connecting'
+          WHERE
+            provider = 'baileys'
+            AND phone_number_id = $1
+            AND status NOT IN ('removed', 'disabled')
+          `,
+          [sessionId],
+        )
+
         console.info('[Baileys] QR generated', {
           sessionId,
           qrLength: qr.length,
@@ -1454,6 +1466,23 @@ async function openSocket(sessionId, timeoutMs = 240_000, generationId = null) {
         })
 
         if (!updated) return
+
+        await pool.query(
+          `
+          UPDATE whatsapp_phone_numbers
+          SET
+            status = 'connected',
+            phone_e164 = COALESCE($2, phone_e164)
+          WHERE
+            provider = 'baileys'
+            AND phone_number_id = $1
+            AND status <> 'removed'
+          `,
+          [
+            sessionId,
+            phone ? '+' + phone : null,
+          ],
+        )
 
         console.info('[Baileys] connection opened', {
           sessionId,
@@ -1489,6 +1518,18 @@ async function openSocket(sessionId, timeoutMs = 240_000, generationId = null) {
             qrcode: null,
             lastError: 'Sessão removida pelo WhatsApp.',
           })
+
+          await pool.query(
+            `
+            UPDATE whatsapp_phone_numbers
+            SET status = 'disconnected'
+            WHERE
+              provider = 'baileys'
+              AND phone_number_id = $1
+              AND status <> 'removed'
+            `,
+            [sessionId],
+          )
 
           settleFirst({
             kind: 'close',
