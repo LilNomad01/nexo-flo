@@ -76,6 +76,97 @@ function captionWithoutUrls(text, urls) {
     .trim()
 }
 
+function buildOutboundContent(textValue, mediaValue) {
+  const text = String(textValue || '').trim()
+  const media =
+    mediaValue && typeof mediaValue === 'object'
+      ? mediaValue
+      : null
+
+  if (!text && !media) {
+    const error = new Error('A mensagem está vazia.')
+    error.status = 422
+    throw error
+  }
+
+  const urls = extractHttpUrls(text)
+
+  if (!media) {
+    const firstUrl = urls[0]
+    return {
+      content: firstUrl
+        ? { text, linkPreview: linkPreviewFor(firstUrl) }
+        : { text },
+      extraLinkText: null,
+    }
+  }
+
+  const mediaType = String(media.type || '')
+  const mime = String(media.mime || '')
+  const filename = String(media.filename || 'arquivo').slice(0, 220)
+  const rawData = String(media.data || '')
+  const mediaCaption = urls.length
+    ? captionWithoutUrls(text, urls)
+    : text
+
+  const allowedTypes = new Set([
+    'image',
+    'video',
+    'document',
+  ])
+
+  const allowedMime = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'video/mp4',
+    'application/pdf',
+  ])
+
+  if (!allowedTypes.has(mediaType) || !allowedMime.has(mime)) {
+    const error = new Error('Formato de mídia não suportado.')
+    error.status = 422
+    throw error
+  }
+
+  const mediaBuffer = Buffer.from(rawData, 'base64')
+
+  if (!mediaBuffer.length || mediaBuffer.length > 2500000) {
+    const error = new Error('A mídia precisa ter até 2,5 MB.')
+    error.status = 422
+    throw error
+  }
+
+  let content
+
+  if (mediaType === 'image') {
+    content = {
+      image: mediaBuffer,
+      mimetype: mime,
+      caption: mediaCaption || undefined,
+    }
+  } else if (mediaType === 'video') {
+    content = {
+      video: mediaBuffer,
+      mimetype: mime,
+      caption: mediaCaption || undefined,
+    }
+  } else {
+    content = {
+      document: mediaBuffer,
+      mimetype: mime,
+      fileName: filename || 'documento.pdf',
+      caption: mediaCaption || undefined,
+    }
+  }
+
+  return {
+    content,
+    extraLinkText: urls.length ? urls.join('\n') : null,
+    firstUrl: urls[0] || null,
+  }
+}
+
 function authorized(request, action, sessionId, body) {
   const timestamp = String(request.headers['x-nexo-timestamp'] || '')
   const signature = String(request.headers['x-nexo-signature'] || '')
@@ -623,6 +714,220 @@ async function handleAction(action, sessionId, body) {
       return { results: result.map(item => ({ query: item.jid?.split('@', 1)[0], jid: item.jid, exists: Boolean(item.exists) })) }
     } finally { handle.close() }
   }
+  if (action === 'batch-messages') {
+    return withSessionLock(sessionId, async () => {
+      await ensureSchema()
+
+      const input = Array.isArray(body.messages)
+        ? body.messages.slice(0, 15)
+        : []
+
+      if (!input.length) {
+        const error = new Error('Nenhuma mensagem foi enviada no lote.')
+        error.status = 422
+        throw error
+      }
+
+      const normalized = input.map((item, index) => {
+        const requestId = String(item?.requestId || '').trim()
+        const to = String(item?.to || '').replace(/\D/g, '')
+
+        if (!requestId || !to) {
+          const error = new Error(
+            'Mensagem ' + (index + 1) + ' possui destinatário ou requestId inválido.'
+          )
+          error.status = 422
+          throw error
+        }
+
+        return {
+          requestId,
+          to,
+          text: String(item?.text || ''),
+          media:
+            item?.media && typeof item.media === 'object'
+              ? item.media
+              : null,
+        }
+      })
+
+      const requestIds = normalized.map(item => item.requestId)
+
+      const existing = await pool.query(
+        'SELECT request_id, message_id FROM baileys_sent_requests WHERE session_id=$1 AND request_id = ANY($2)',
+        [sessionId, requestIds],
+      )
+
+      const existingByRequest = new Map(
+        existing.rows.map(row => [
+          row.request_id,
+          row.message_id,
+        ])
+      )
+
+      const pending = normalized.filter(
+        item => !existingByRequest.has(item.requestId)
+      )
+
+      const results = normalized
+        .filter(item => existingByRequest.has(item.requestId))
+        .map(item => ({
+          requestId: item.requestId,
+          ok: true,
+          id: existingByRequest.get(item.requestId),
+          duplicate: true,
+        }))
+
+      if (!pending.length) {
+        return {
+          results,
+          sent: results.length,
+          failed: 0,
+        }
+      }
+
+      const handle = await openSocket(
+        sessionId,
+        70_000,
+      )
+
+      try {
+        await waitForOpen(
+          handle,
+          30_000,
+        )
+
+        const uniqueNumbers = [
+          ...new Set(
+            pending.map(item => item.to)
+          ),
+        ]
+
+        const checked =
+          uniqueNumbers.length
+            ? await handle.sock.onWhatsApp(...uniqueNumbers)
+            : []
+
+        const jidByNumber = new Map()
+
+        for (const item of checked) {
+          const number =
+            String(item?.jid || '')
+              .split('@', 1)[0]
+
+          if (item?.exists && number) {
+            jidByNumber.set(number, item.jid)
+          }
+        }
+
+        for (let index = 0; index < pending.length; index += 1) {
+          const item = pending[index]
+          const jid = jidByNumber.get(item.to)
+
+          if (!jid) {
+            results.push({
+              requestId: item.requestId,
+              ok: false,
+              code: 'recipient_not_on_whatsapp',
+              error: 'O número do destinatário não está cadastrado no WhatsApp.',
+            })
+            continue
+          }
+
+          try {
+            const outbound = buildOutboundContent(
+              item.text,
+              item.media,
+            )
+
+            const sent = await handle.sock.sendMessage(
+              jid,
+              outbound.content,
+            )
+
+            let messageId = sent?.key?.id
+
+            if (outbound.extraLinkText) {
+              const linkSent = await handle.sock.sendMessage(
+                jid,
+                {
+                  text: outbound.extraLinkText,
+                  linkPreview: linkPreviewFor(
+                    outbound.firstUrl
+                  ),
+                },
+              )
+
+              messageId =
+                linkSent?.key?.id ||
+                messageId
+            }
+
+            if (!messageId) {
+              throw new Error(
+                'O WhatsApp não retornou o ID da mensagem.'
+              )
+            }
+
+            await pool.query(
+              'INSERT INTO baileys_sent_requests (session_id, request_id, message_id) VALUES ($1,$2,$3) ON CONFLICT (session_id, request_id) DO NOTHING',
+              [
+                sessionId,
+                item.requestId,
+                messageId,
+              ],
+            )
+
+            results.push({
+              requestId: item.requestId,
+              ok: true,
+              id: messageId,
+            })
+          } catch (error) {
+            results.push({
+              requestId: item.requestId,
+              ok: false,
+              code: String(error?.status || 'send_failed'),
+              error:
+                error?.message ||
+                'Falha ao enviar a mensagem.',
+            })
+          }
+
+          // Mantém o socket rápido sem criar uma rajada instantânea.
+          if (index < pending.length - 1) {
+            await new Promise(
+              resolve => setTimeout(resolve, 350)
+            )
+          }
+        }
+
+        await handle.flush()
+
+        await upsertSession(
+          sessionId,
+          {
+            status: 'connected',
+            qrcode: null,
+            lastError: null,
+          },
+        )
+
+        return {
+          results,
+          sent: results.filter(item => item.ok).length,
+          failed: results.filter(item => !item.ok).length,
+        }
+      } finally {
+        try {
+          await handle.flush()
+        } catch {}
+
+        handle.close()
+      }
+    })
+  }
+
   if (action === 'messages') {
     return withSessionLock(sessionId, async () => {
       await ensureSchema()
