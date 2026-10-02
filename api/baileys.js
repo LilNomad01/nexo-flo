@@ -802,10 +802,10 @@ async function handleAction(action, sessionId, body) {
           )
         }
 
-        // Dá tempo ao Baileys para processar eventos de credenciais
-        // antes da função serverless terminar.
+        // Uma espera curta basta para drenar eventos imediatos; o flush
+        // abaixo persiste as credenciais antes de fechar o socket.
         await new Promise(
-          resolve => setTimeout(resolve, 900)
+          resolve => setTimeout(resolve, 180)
         )
 
         await handle.flush()
