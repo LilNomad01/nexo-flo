@@ -977,7 +977,7 @@
       processing
       || status !== 'running'
     ) {
-      schedule(900);
+      schedule(1500);
       return;
     }
 
@@ -1029,6 +1029,29 @@
       updateDeliveries(
         result.deliveries
       );
+
+      if (result.processing_rate) {
+        const rateItem =
+          Array.from(
+            document.querySelectorAll(
+              '.campaign-info-item'
+            )
+          ).find(
+            item =>
+              item.querySelector('span')
+                ?.textContent.trim()
+                === 'Ritmo configurado'
+          );
+
+        const rateStrong =
+          rateItem?.querySelector('strong');
+
+        if (rateStrong) {
+          rateStrong.textContent =
+            result.processing_rate +
+            '/min';
+        }
+      }
 
       if (
         requestRevision === controlRevision
