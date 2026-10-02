@@ -181,7 +181,7 @@ async def kick_baileys_campaign(
     number: WhatsAppNumber,
     campaign: Campaign,
     workspace_id: str,
-) -> bool:
+):
     if (
         number.provider != "baileys"
         or number.waba_id != "vercel-internal"
@@ -195,12 +195,10 @@ async def kick_baileys_campaign(
     if not isinstance(provider, VercelBaileysProvider):
         return False
 
-    await provider.start_campaign_drain(
+    return await provider.start_campaign_drain(
         campaign.id,
         workspace_id,
     )
-
-    return True
 
 
 def anonymous_page(request: Request, name: str, **context):
@@ -1557,6 +1555,32 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
     contact_list = db.get(ContactList, campaign.list_id)
     number = db.get(WhatsAppNumber, campaign.phone_number_id)
 
+    has_media = any(
+        bool(step.media_type)
+        for step in steps
+    )
+
+    channel_query = (
+        select(WhatsAppNumber)
+        .where(
+            WhatsAppNumber.workspace_id == auth[2].id,
+            WhatsAppNumber.status == "connected",
+        )
+        .order_by(
+            WhatsAppNumber.display_name,
+            WhatsAppNumber.created_at.desc(),
+        )
+    )
+
+    if has_media:
+        channel_query = channel_query.where(
+            WhatsAppNumber.provider == "baileys"
+        )
+
+    available_numbers = db.scalars(
+        channel_query
+    ).all()
+
     simulation = simulate_campaign(
         db,
         auth[2].id,
@@ -1712,12 +1736,273 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
         steps=steps,
         contact_list=contact_list,
         number=number,
+        available_numbers=available_numbers,
+        has_media=has_media,
         simulation=simulation,
         estimated_minutes=estimated_minutes,
         interval_mode=interval_mode,
         delivery_groups=delivery_groups,
         failed_deliveries=failed_deliveries,
         cancelled_deliveries=cancelled_deliveries,
+    )
+
+
+@app.post("/campaigns/{campaign_id}/switch-channel")
+async def campaign_switch_channel(
+    campaign_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    auth = require_auth(request, db)
+    form = await checked_form(request, auth[0])
+
+    campaign = get_campaign(
+        db,
+        auth[2].id,
+        campaign_id,
+    )
+
+    if campaign.status == "completed":
+        return RedirectResponse(
+            f"/campaigns/{campaign.id}?error=Campanha+concluída+não+pode+trocar+de+canal",
+            status_code=303,
+        )
+
+    target_id = str(
+        form.get("phone_number_id", "")
+    ).strip()
+
+    target = db.scalar(
+        select(WhatsAppNumber).where(
+            WhatsAppNumber.id == target_id,
+            WhatsAppNumber.workspace_id == auth[2].id,
+            WhatsAppNumber.status == "connected",
+        )
+    )
+
+    if not target:
+        return RedirectResponse(
+            f"/campaigns/{campaign.id}?error=Selecione+um+canal+conectado",
+            status_code=303,
+        )
+
+    current = db.get(
+        WhatsAppNumber,
+        campaign.phone_number_id,
+    )
+
+    if current and current.id == target.id:
+        return RedirectResponse(
+            f"/campaigns/{campaign.id}?channel_same=1",
+            status_code=303,
+        )
+
+    steps = db.scalars(
+        select(CampaignStep).where(
+            CampaignStep.campaign_id == campaign.id
+        )
+    ).all()
+
+    if (
+        any(step.media_type for step in steps)
+        and target.provider != "baileys"
+    ):
+        return RedirectResponse(
+            f"/campaigns/{campaign.id}?error=Campanhas+com+mídia+precisam+usar+um+canal+Baileys",
+            status_code=303,
+        )
+
+    try:
+        if target.provider == "baileys":
+            connection = await sync_baileys_number(
+                target
+            )
+            if not connection.connected:
+                db.commit()
+                return RedirectResponse(
+                    f"/campaigns/{campaign.id}?error=O+novo+canal+Baileys+não+está+conectado",
+                    status_code=303,
+                )
+        elif target.provider == "uazapi":
+            connection = await sync_uazapi_number(
+                target
+            )
+            if not connection.connected:
+                db.commit()
+                return RedirectResponse(
+                    f"/campaigns/{campaign.id}?error=O+novo+canal+UAZAPI+não+está+conectado",
+                    status_code=303,
+                )
+    except ProviderError:
+        db.commit()
+        return RedirectResponse(
+            f"/campaigns/{campaign.id}?error=Não+foi+possível+validar+o+novo+canal",
+            status_code=303,
+        )
+
+    previous_status = campaign.status
+    was_running = previous_status == "running"
+
+    # Faz o worker atual perceber a pausa antes de reatribuir os jobs.
+    # Isso reduz a janela em que uma mensagem já em voo ainda poderia sair
+    # pelo canal antigo.
+    if was_running:
+        campaign.status = "paused"
+        db.commit()
+        await asyncio.sleep(0.8)
+
+        campaign = get_campaign(
+            db,
+            auth[2].id,
+            campaign_id,
+        )
+        target = db.get(
+            WhatsAppNumber,
+            target_id,
+        )
+
+    campaign.phone_number_id = target.id
+
+    if (
+        target.provider == "baileys"
+        and target.waba_id == "vercel-internal"
+    ):
+        campaign.processing_rate = (
+            settings.baileys_max_messages_per_minute
+        )
+    else:
+        campaign.processing_rate = min(
+            campaign.processing_rate,
+            settings.max_messages_per_minute,
+        )
+
+    rows = db.execute(
+        select(
+            Message,
+            OutboxJob,
+        )
+        .join(
+            OutboxJob,
+            OutboxJob.message_id == Message.id,
+        )
+        .where(
+            Message.campaign_id == campaign.id,
+            Message.status.notin_(
+                ["sent", "delivered", "read"]
+            ),
+            OutboxJob.status.notin_(
+                ["sent"]
+            ),
+        )
+        .with_for_update()
+    ).all()
+
+    touched_contacts = set()
+
+    for message, job in rows:
+        message.phone_number_id = target.id
+        message.status = "queued"
+        message.error_message = None
+
+        job.locked_at = None
+        job.last_error = None
+        job.attempts = 0
+
+        if was_running:
+            job.status = "pending"
+            job.available_at = now()
+        elif previous_status == "paused":
+            job.status = "paused"
+        elif job.status in {
+            "failed",
+            "cancelled",
+            "processing",
+        }:
+            job.status = "pending"
+            job.available_at = now()
+
+        touched_contacts.add(
+            message.contact_id
+        )
+
+    for contact_id in touched_contacts:
+        recipient = db.scalar(
+            select(CampaignRecipient).where(
+                CampaignRecipient.campaign_id == campaign.id,
+                CampaignRecipient.contact_id == contact_id,
+            )
+        )
+
+        if recipient:
+            recipient.status = (
+                "queued"
+                if was_running
+                else (
+                    "paused"
+                    if previous_status == "paused"
+                    else "queued"
+                )
+            )
+            recipient.reason = None
+
+    campaign.status = (
+        "running"
+        if was_running
+        else previous_status
+    )
+    campaign.completed_at = None
+
+    write_log(
+        db,
+        auth[2].id,
+        "info",
+        "campaign",
+        "campaign.channel_switched",
+        (
+            f'Canal alterado de "{current.display_name if current else "desconhecido"}" '
+            f'para "{target.display_name}".'
+        ),
+        provider=target.provider,
+        campaign_id=campaign.id,
+        details={
+            "old_number_id": current.id if current else None,
+            "new_number_id": target.id,
+            "reassigned_jobs": len(rows),
+            "was_running": was_running,
+        },
+    )
+
+    db.commit()
+
+    if (
+        was_running
+        and target.provider == "baileys"
+        and target.waba_id == "vercel-internal"
+    ):
+        # O worker anterior pode levar alguns instantes para liberar a lease.
+        # Tenta o handoff algumas vezes; o polling da tela também atua como
+        # redundância caso o usuário permaneça na página.
+        for _ in range(6):
+            try:
+                result = await kick_baileys_campaign(
+                    target,
+                    campaign,
+                    auth[2].id,
+                )
+
+                if (
+                    isinstance(result, dict)
+                    and result.get("started")
+                ):
+                    break
+            except ProviderError:
+                pass
+
+            await asyncio.sleep(0.45)
+
+    return RedirectResponse(
+        f"/campaigns/{campaign.id}?switched=1",
+        status_code=303,
     )
 
 
