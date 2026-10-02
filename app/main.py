@@ -1875,9 +1875,15 @@ async def campaign_process(campaign_id: str, request: Request, db: Session = Dep
     processed = 0
 
     if campaign.status == "running":
+        number = db.get(
+            WhatsAppNumber,
+            campaign.phone_number_id,
+        )
+
         processed = await process_available_jobs(
             auth[2].id,
             campaign.id,
+            max_jobs=6 if number and number.provider == "baileys" else 2,
         )
 
     db.expire_all()
