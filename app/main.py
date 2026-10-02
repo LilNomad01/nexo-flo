@@ -2060,6 +2060,7 @@ async def campaign_process(campaign_id: str, request: Request, db: Session = Dep
     return {
         "processed": processed,
         "status": campaign.status,
+        "processing_rate": campaign.processing_rate,
         "deliveries": deliveries,
     }
 
