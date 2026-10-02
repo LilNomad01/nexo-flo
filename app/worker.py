@@ -386,6 +386,56 @@ def _next_job(
     campaign_id: Optional[str] = None,
 ) -> str:
     with session_scope() as db:
+        # Recupera jobs que ficaram presos como processing quando uma função
+        # serverless expirou. Isso evita campanhas eternamente em "running"
+        # com todos os contatos pendentes.
+        stale_before = datetime.now(timezone.utc) - timedelta(seconds=75)
+
+        stale_query = (
+            select(OutboxJob)
+            .join(Message, Message.id == OutboxJob.message_id)
+            .join(Campaign, Campaign.id == Message.campaign_id)
+            .where(
+                OutboxJob.status == "processing",
+                OutboxJob.locked_at.is_not(None),
+                OutboxJob.locked_at <= stale_before,
+                Campaign.status == "running",
+            )
+        )
+
+        if workspace_id:
+            stale_query = stale_query.where(
+                OutboxJob.workspace_id == workspace_id
+            )
+
+        if campaign_id:
+            stale_query = stale_query.where(
+                Campaign.id == campaign_id
+            )
+
+        stale_jobs = db.scalars(
+            stale_query.limit(25)
+        ).all()
+
+        for stale_job in stale_jobs:
+            stale_job.status = "pending"
+            stale_job.locked_at = None
+            stale_job.available_at = datetime.now(timezone.utc)
+            stale_job.last_error = None
+
+            stale_message = db.get(
+                Message,
+                stale_job.message_id,
+            )
+
+            if stale_message and stale_message.status not in {
+                "sent",
+                "delivered",
+                "read",
+            }:
+                stale_message.status = "queued"
+                stale_message.error_message = None
+
         query = (
             select(OutboxJob)
             .join(Message, Message.id == OutboxJob.message_id)
