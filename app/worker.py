@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from .config import settings
 from .db import session_scope
@@ -381,6 +381,423 @@ async def _dispatch(job_id: str) -> None:
             write_log(db, job.workspace_id, level, "dispatch", event, str(exc), provider=number.provider, campaign_id=message.campaign_id, contact_id=message.contact_id, message_id=message.id, details={"attempt": job.attempts, "retryable": retryable})
 
 
+def _is_internal_baileys_campaign(
+    workspace_id: str,
+    campaign_id: str,
+) -> bool:
+    with session_scope() as db:
+        campaign = db.scalar(
+            select(Campaign).where(
+                Campaign.id == campaign_id,
+                Campaign.workspace_id == workspace_id,
+                Campaign.status == "running",
+            )
+        )
+
+        if not campaign:
+            return False
+
+        number = db.get(
+            WhatsAppNumber,
+            campaign.phone_number_id,
+        )
+
+        return bool(
+            number
+            and number.provider == "baileys"
+            and number.waba_id == "vercel-internal"
+            and number.status == "connected"
+        )
+
+
+def _claim_baileys_batch(
+    workspace_id: str,
+    campaign_id: str,
+    limit: int = 15,
+) -> list[str]:
+    with session_scope() as db:
+        now_value = datetime.now(timezone.utc)
+        stale_before = now_value - timedelta(seconds=75)
+
+        stale_jobs = db.scalars(
+            select(OutboxJob)
+            .join(Message, Message.id == OutboxJob.message_id)
+            .where(
+                OutboxJob.workspace_id == workspace_id,
+                Message.campaign_id == campaign_id,
+                OutboxJob.status == "processing",
+                OutboxJob.locked_at.is_not(None),
+                OutboxJob.locked_at <= stale_before,
+            )
+            .limit(30)
+        ).all()
+
+        for stale_job in stale_jobs:
+            stale_job.status = "pending"
+            stale_job.locked_at = None
+            stale_job.available_at = now_value
+            stale_job.last_error = None
+
+            stale_message = db.get(
+                Message,
+                stale_job.message_id,
+            )
+
+            if stale_message and stale_message.status not in {
+                "sent",
+                "delivered",
+                "read",
+            }:
+                stale_message.status = "queued"
+                stale_message.error_message = None
+
+        query = (
+            select(OutboxJob)
+            .join(Message, Message.id == OutboxJob.message_id)
+            .join(Campaign, Campaign.id == Message.campaign_id)
+            .outerjoin(
+                CampaignStep,
+                CampaignStep.id == Message.campaign_step_id,
+            )
+            .where(
+                OutboxJob.workspace_id == workspace_id,
+                Message.campaign_id == campaign_id,
+                Campaign.status == "running",
+                OutboxJob.status == "pending",
+                or_(
+                    OutboxJob.available_at <= now_value,
+                    CampaignStep.position == 1,
+                ),
+            )
+            .order_by(
+                CampaignStep.position,
+                OutboxJob.available_at,
+                OutboxJob.created_at,
+            )
+            .limit(max(1, min(limit, 15)))
+            .with_for_update(skip_locked=True)
+        )
+
+        jobs = list(
+            db.scalars(query).all()
+        )
+
+        for job in jobs:
+            job.status = "processing"
+            job.attempts += 1
+            job.locked_at = now_value
+
+        campaign = db.get(
+            Campaign,
+            campaign_id,
+        )
+
+        if campaign and campaign.processing_rate < settings.baileys_max_messages_per_minute:
+            campaign.processing_rate = settings.baileys_max_messages_per_minute
+
+        return [job.id for job in jobs]
+
+
+async def _dispatch_baileys_batch(
+    job_ids: list[str],
+) -> int:
+    if not job_ids:
+        return 0
+
+    with session_scope() as db:
+        rows = []
+
+        for job_id in job_ids:
+            job = db.get(
+                OutboxJob,
+                job_id,
+            )
+
+            if not job or job.status != "processing":
+                continue
+
+            message = db.get(
+                Message,
+                job.message_id,
+            )
+
+            contact = (
+                db.get(Contact, message.contact_id)
+                if message
+                else None
+            )
+
+            number = (
+                db.get(WhatsAppNumber, message.phone_number_id)
+                if message
+                else None
+            )
+
+            campaign = (
+                db.get(Campaign, message.campaign_id)
+                if message and message.campaign_id
+                else None
+            )
+
+            if (
+                not message
+                or not contact
+                or not number
+                or not campaign
+            ):
+                job.status = "failed"
+                job.locked_at = None
+                job.last_error = (
+                    "Referência de mensagem, contato, campanha ou canal ausente."
+                )
+                continue
+
+            if campaign.status != "running":
+                job.status = (
+                    "paused"
+                    if campaign.status == "paused"
+                    else "cancelled"
+                )
+                job.locked_at = None
+                message.status = "queued"
+                continue
+
+            if (
+                number.provider != "baileys"
+                or number.waba_id != "vercel-internal"
+                or number.status != "connected"
+            ):
+                job.status = "failed"
+                job.locked_at = None
+                job.last_error = (
+                    "O canal Baileys interno está desconectado ou indisponível."
+                )
+                message.status = "failed"
+                message.error_message = job.last_error
+                continue
+
+            step = (
+                db.get(CampaignStep, message.campaign_step_id)
+                if message.campaign_step_id
+                else None
+            )
+
+            media = None
+
+            if message.type != "text":
+                if (
+                    not step
+                    or not step.media_type
+                    or not step.media_mime
+                    or not step.media_data_base64
+                ):
+                    job.status = "failed"
+                    job.locked_at = None
+                    job.last_error = (
+                        "A mídia deste bloco não está disponível."
+                    )
+                    message.status = "failed"
+                    message.error_message = job.last_error
+                    continue
+
+                media = {
+                    "type": step.media_type,
+                    "mime": step.media_mime,
+                    "filename": step.media_filename or "arquivo",
+                    "data": step.media_data_base64,
+                }
+
+            rows.append(
+                {
+                    "job": job,
+                    "message": message,
+                    "contact": contact,
+                    "number": number,
+                    "campaign": campaign,
+                    "payload": {
+                        "requestId": message.idempotency_key,
+                        "to": contact.phone_e164.lstrip("+"),
+                        "text": message.body or "",
+                        **({"media": media} if media else {}),
+                    },
+                }
+            )
+
+        if not rows:
+            return 0
+
+        number = rows[0]["number"]
+        provider = VercelBaileysProvider(
+            settings.public_base_url,
+            settings.app_secret,
+            number.phone_number_id,
+        )
+
+        try:
+            results = await provider.send_batch(
+                [row["payload"] for row in rows]
+            )
+        except ProviderError as exc:
+            normalized = str(exc).lower()
+            auth_error = any(
+                marker in normalized
+                for marker in (
+                    "pareada pelo qr",
+                    "pareado pelo qr",
+                    "sessão removida",
+                    "sessao removida",
+                    "logged out",
+                    "loggedout",
+                    "connection replaced",
+                )
+            )
+
+            busy = (
+                getattr(exc, "code", "") == "429"
+                or "sessão baileys está ocupada" in normalized
+                or "sessao baileys esta ocupada" in normalized
+                or "envio anterior" in normalized
+            )
+
+            for row in rows:
+                job = row["job"]
+                message = row["message"]
+                campaign = row["campaign"]
+
+                if auth_error:
+                    campaign.status = "paused"
+                    job.status = "paused"
+                    job.available_at = (
+                        datetime.now(timezone.utc)
+                        + timedelta(seconds=60)
+                    )
+                else:
+                    job.status = "pending"
+                    job.available_at = (
+                        datetime.now(timezone.utc)
+                        + timedelta(seconds=1 if busy else 5)
+                    )
+                    if busy:
+                        job.attempts = max(
+                            0,
+                            (job.attempts or 1) - 1,
+                        )
+
+                job.locked_at = None
+                job.last_error = None if busy else str(exc)[:1000]
+                message.status = "queued"
+                message.error_message = None if busy else job.last_error
+
+            return 0
+
+        by_request = {
+            str(item.get("requestId")): item
+            for item in results
+            if isinstance(item, dict)
+        }
+
+        sent_count = 0
+
+        for row in rows:
+            job = row["job"]
+            message = row["message"]
+            contact = row["contact"]
+            campaign = row["campaign"]
+            result = by_request.get(
+                message.idempotency_key
+            )
+
+            if result and result.get("ok"):
+                provider_id = str(
+                    result.get("id") or ""
+                )
+
+                message.provider_message_id = (
+                    provider_id or None
+                )
+                message.status = "sent"
+                message.sent_at = datetime.now(timezone.utc)
+                message.error_message = None
+
+                job.status = "sent"
+                job.locked_at = None
+                job.last_error = None
+
+                recipient = db.scalar(
+                    select(CampaignRecipient).where(
+                        CampaignRecipient.campaign_id == campaign.id,
+                        CampaignRecipient.contact_id == contact.id,
+                    )
+                )
+
+                if recipient:
+                    recipient.status = "sent"
+                    recipient.reason = None
+
+                sent_count += 1
+                continue
+
+            error_message = str(
+                (result or {}).get("error")
+                or "O Baileys não retornou o resultado deste envio."
+            )[:1000]
+
+            error_code = str(
+                (result or {}).get("code")
+                or "batch_send_failed"
+            )
+
+            permanent = (
+                error_code == "recipient_not_on_whatsapp"
+                or error_code == "422"
+                or "não está cadastrado" in error_message.lower()
+            )
+
+            job.locked_at = None
+            job.last_error = error_message
+            message.error_message = error_message
+
+            if permanent or job.attempts >= MAX_ATTEMPTS:
+                job.status = "failed"
+                message.status = "failed"
+
+                recipient = db.scalar(
+                    select(CampaignRecipient).where(
+                        CampaignRecipient.campaign_id == campaign.id,
+                        CampaignRecipient.contact_id == contact.id,
+                    )
+                )
+
+                if recipient:
+                    recipient.status = "failed"
+                    recipient.reason = error_message[:160]
+            else:
+                job.status = "pending"
+                job.available_at = (
+                    datetime.now(timezone.utc)
+                    + timedelta(seconds=3)
+                )
+                message.status = "queued"
+
+        write_log(
+            db,
+            rows[0]["job"].workspace_id,
+            "success" if sent_count else "warning",
+            "dispatch",
+            "baileys.batch_processed",
+            f"Lote Baileys processado: {sent_count}/{len(rows)} enviado(s).",
+            provider="baileys",
+            campaign_id=rows[0]["campaign"].id,
+            details={
+                "batch_size": len(rows),
+                "sent": sent_count,
+                "failed_or_retry": len(rows) - sent_count,
+            },
+        )
+
+        return len(rows)
+
+
 def _next_job(
     workspace_id: Optional[str] = None,
     campaign_id: Optional[str] = None,
@@ -518,19 +935,53 @@ async def process_available_jobs(
     campaign_id: Optional[str] = None,
     max_jobs: int = 1,
 ) -> int:
-    """Processa um lote curto, adequado a uma requisição serverless autenticada."""
+    """Processa fila normal ou um lote rápido do Baileys interno."""
+    if (
+        campaign_id
+        and await asyncio.to_thread(
+            _is_internal_baileys_campaign,
+            workspace_id,
+            campaign_id,
+        )
+    ):
+        job_ids = await asyncio.to_thread(
+            _claim_baileys_batch,
+            workspace_id,
+            campaign_id,
+            max_jobs,
+        )
+
+        processed = await _dispatch_baileys_batch(
+            job_ids
+        )
+
+        await asyncio.to_thread(
+            _complete_campaigns
+        )
+
+        return processed
+
     processed = 0
-    for _ in range(max(1, min(max_jobs, 10))):
+
+    for _ in range(
+        max(1, min(max_jobs, 10))
+    ):
         job_id = await asyncio.to_thread(
             _next_job,
             workspace_id,
             campaign_id,
         )
+
         if not job_id:
             break
+
         await _dispatch(job_id)
         processed += 1
-    await asyncio.to_thread(_complete_campaigns)
+
+    await asyncio.to_thread(
+        _complete_campaigns
+    )
+
     return processed
 
 
