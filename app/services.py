@@ -95,7 +95,7 @@ def _smart_baileys_lead_gap(campaign: Campaign, contact: Contact, lead_index: in
     necessário adicionar warmup, jitter e pausas a cada 10 contatos.
     """
     return max(
-        1.5,
+        0.5,
         60.0 / max(1, campaign.processing_rate),
     )
 
@@ -124,7 +124,7 @@ def enqueue_campaign(db: Session, workspace_id: str, campaign: Campaign) -> int:
     since = datetime.now(timezone.utc) - timedelta(days=7)
 
     minimum_gap = max(
-        1.5,
+        0.5 if number.provider == "baileys" else 1.5,
         60.0 / max(1, campaign.processing_rate),
     )
 
