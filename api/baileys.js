@@ -167,6 +167,796 @@ function buildOutboundContent(textValue, mediaValue) {
   }
 }
 
+const sleep = milliseconds =>
+  new Promise(resolve => setTimeout(resolve, milliseconds))
+
+async function claimCampaignBatch(
+  campaignId,
+  workspaceId,
+  sessionId,
+  limit = 15,
+) {
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    await client.query(
+      `
+      UPDATE outbox_jobs AS job
+      SET
+        status = 'pending',
+        locked_at = NULL,
+        available_at = now(),
+        last_error = NULL
+      FROM messages AS message
+      WHERE
+        job.message_id = message.id
+        AND job.workspace_id = $2
+        AND message.campaign_id = $1
+        AND job.status = 'processing'
+        AND job.locked_at IS NOT NULL
+        AND job.locked_at <= now() - interval '75 seconds'
+      `,
+      [campaignId, workspaceId],
+    )
+
+    const selected = await client.query(
+      `
+      SELECT
+        job.id AS job_id,
+        job.attempts,
+        job.idempotency_key,
+        message.id AS message_id,
+        message.body,
+        message.type,
+        message.contact_id,
+        message.campaign_step_id,
+        contact.phone_e164,
+        step.position,
+        step.media_type,
+        step.media_mime,
+        step.media_filename,
+        step.media_data_base64
+      FROM outbox_jobs AS job
+      JOIN messages AS message
+        ON message.id = job.message_id
+      JOIN campaigns AS campaign
+        ON campaign.id = message.campaign_id
+      JOIN whatsapp_phone_numbers AS number
+        ON number.id = campaign.phone_number_id
+      JOIN contacts AS contact
+        ON contact.id = message.contact_id
+      LEFT JOIN campaign_steps AS step
+        ON step.id = message.campaign_step_id
+      WHERE
+        campaign.id = $1
+        AND campaign.workspace_id = $2
+        AND campaign.status = 'running'
+        AND number.provider = 'baileys'
+        AND number.waba_id = 'vercel-internal'
+        AND number.phone_number_id = $3
+        AND number.status = 'connected'
+        AND job.status = 'pending'
+        AND (
+          job.available_at <= now()
+          OR COALESCE(step.position, 1) = 1
+        )
+      ORDER BY
+        CASE
+          WHEN COALESCE(step.position, 1) = 1
+            THEN 0
+          ELSE 1
+        END,
+        job.available_at,
+        job.created_at
+      LIMIT $4
+      FOR UPDATE OF job SKIP LOCKED
+      `,
+      [
+        campaignId,
+        workspaceId,
+        sessionId,
+        Math.max(1, Math.min(Number(limit) || 15, 15)),
+      ],
+    )
+
+    const rows = selected.rows
+
+    if (rows.length) {
+      await client.query(
+        `
+        UPDATE outbox_jobs
+        SET
+          status = 'processing',
+          attempts = attempts + 1,
+          locked_at = now()
+        WHERE id = ANY($1)
+        `,
+        [rows.map(row => row.job_id)],
+      )
+    }
+
+    await client.query('COMMIT')
+
+    return rows.map(row => ({
+      ...row,
+      attempt: Number(row.attempts || 0) + 1,
+    }))
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {}
+
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+async function campaignState(
+  campaignId,
+  workspaceId,
+) {
+  const result = await pool.query(
+    `
+    SELECT
+      campaign.status,
+      COUNT(*) FILTER (
+        WHERE job.status IN ('pending', 'processing')
+      )::int AS pending,
+      COUNT(*) FILTER (
+        WHERE job.status = 'failed'
+      )::int AS failed,
+      COUNT(*) FILTER (
+        WHERE job.status = 'cancelled'
+      )::int AS cancelled,
+      MIN(job.available_at) FILTER (
+        WHERE job.status = 'pending'
+      ) AS next_available_at
+    FROM campaigns AS campaign
+    LEFT JOIN messages AS message
+      ON message.campaign_id = campaign.id
+    LEFT JOIN outbox_jobs AS job
+      ON job.message_id = message.id
+    WHERE
+      campaign.id = $1
+      AND campaign.workspace_id = $2
+    GROUP BY campaign.id, campaign.status
+    `,
+    [campaignId, workspaceId],
+  )
+
+  return result.rows[0] || null
+}
+
+async function finishCampaignIfDone(
+  campaignId,
+  workspaceId,
+) {
+  const state = await campaignState(
+    campaignId,
+    workspaceId,
+  )
+
+  if (
+    !state ||
+    state.status !== 'running' ||
+    Number(state.pending || 0) > 0
+  ) {
+    return state
+  }
+
+  let status = 'completed'
+
+  if (Number(state.failed || 0) > 0) {
+    status = 'failed'
+  } else if (Number(state.cancelled || 0) > 0) {
+    status = 'cancelled'
+  }
+
+  await pool.query(
+    `
+    UPDATE campaigns
+    SET
+      status = $3,
+      completed_at = now()
+    WHERE
+      id = $1
+      AND workspace_id = $2
+      AND status = 'running'
+    `,
+    [
+      campaignId,
+      workspaceId,
+      status,
+    ],
+  )
+
+  return {
+    ...state,
+    status,
+  }
+}
+
+async function markCampaignJobSent(
+  row,
+  messageId,
+  campaignId,
+) {
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    await client.query(
+      `
+      UPDATE messages
+      SET
+        status = 'sent',
+        provider_message_id = $2,
+        sent_at = now(),
+        error_message = NULL
+      WHERE id = $1
+      `,
+      [
+        row.message_id,
+        messageId || null,
+      ],
+    )
+
+    await client.query(
+      `
+      UPDATE outbox_jobs
+      SET
+        status = 'sent',
+        locked_at = NULL,
+        last_error = NULL
+      WHERE id = $1
+      `,
+      [row.job_id],
+    )
+
+    await client.query(
+      `
+      UPDATE campaign_recipients
+      SET
+        status = 'sent',
+        reason = NULL
+      WHERE
+        campaign_id = $1
+        AND contact_id = $2
+      `,
+      [
+        campaignId,
+        row.contact_id,
+      ],
+    )
+
+    await client.query('COMMIT')
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {}
+
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+async function markCampaignJobFailed(
+  row,
+  campaignId,
+  message,
+  permanent = false,
+) {
+  const finalFailure =
+    permanent ||
+    Number(row.attempt || 1) >= 4
+
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    if (finalFailure) {
+      await client.query(
+        `
+        UPDATE messages
+        SET
+          status = 'failed',
+          error_message = $2
+        WHERE id = $1
+        `,
+        [
+          row.message_id,
+          String(message || 'Falha no envio').slice(0, 1000),
+        ],
+      )
+
+      await client.query(
+        `
+        UPDATE outbox_jobs
+        SET
+          status = 'failed',
+          locked_at = NULL,
+          last_error = $2
+        WHERE id = $1
+        `,
+        [
+          row.job_id,
+          String(message || 'Falha no envio').slice(0, 1000),
+        ],
+      )
+
+      await client.query(
+        `
+        UPDATE campaign_recipients
+        SET
+          status = 'failed',
+          reason = $3
+        WHERE
+          campaign_id = $1
+          AND contact_id = $2
+        `,
+        [
+          campaignId,
+          row.contact_id,
+          String(message || 'Falha no envio').slice(0, 160),
+        ],
+      )
+    } else {
+      await client.query(
+        `
+        UPDATE messages
+        SET
+          status = 'queued',
+          error_message = $2
+        WHERE id = $1
+        `,
+        [
+          row.message_id,
+          String(message || 'Falha temporária').slice(0, 1000),
+        ],
+      )
+
+      await client.query(
+        `
+        UPDATE outbox_jobs
+        SET
+          status = 'pending',
+          locked_at = NULL,
+          last_error = $2,
+          available_at = now() + interval '3 seconds'
+        WHERE id = $1
+        `,
+        [
+          row.job_id,
+          String(message || 'Falha temporária').slice(0, 1000),
+        ],
+      )
+    }
+
+    await client.query('COMMIT')
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {}
+
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+async function sendCampaignRow(
+  handle,
+  row,
+  campaignId,
+  existingMessageId = null,
+  jid = null,
+) {
+  if (existingMessageId) {
+    await markCampaignJobSent(
+      row,
+      existingMessageId,
+      campaignId,
+    )
+
+    return {
+      ok: true,
+      duplicate: true,
+    }
+  }
+
+  if (!jid) {
+    await markCampaignJobFailed(
+      row,
+      campaignId,
+      'O número do destinatário não está cadastrado no WhatsApp.',
+      true,
+    )
+
+    return {
+      ok: false,
+      permanent: true,
+    }
+  }
+
+  try {
+    const media =
+      row.media_type
+      && row.media_mime
+      && row.media_data_base64
+        ? {
+            type: row.media_type,
+            mime: row.media_mime,
+            filename: row.media_filename || 'arquivo',
+            data: row.media_data_base64,
+          }
+        : null
+
+    const outbound = buildOutboundContent(
+      row.body || '',
+      media,
+    )
+
+    const sent = await handle.sock.sendMessage(
+      jid,
+      outbound.content,
+    )
+
+    let messageId = sent?.key?.id
+
+    if (outbound.extraLinkText) {
+      const linkSent = await handle.sock.sendMessage(
+        jid,
+        {
+          text: outbound.extraLinkText,
+          linkPreview: linkPreviewFor(
+            outbound.firstUrl
+          ),
+        },
+      )
+
+      messageId =
+        linkSent?.key?.id ||
+        messageId
+    }
+
+    if (!messageId) {
+      throw new Error(
+        'O WhatsApp não retornou o ID da mensagem.'
+      )
+    }
+
+    await pool.query(
+      `
+      INSERT INTO baileys_sent_requests (
+        session_id,
+        request_id,
+        message_id
+      )
+      VALUES ($1,$2,$3)
+      ON CONFLICT (session_id, request_id)
+      DO NOTHING
+      `,
+      [
+        handle.sessionId,
+        row.idempotency_key,
+        messageId,
+      ],
+    )
+
+    await markCampaignJobSent(
+      row,
+      messageId,
+      campaignId,
+    )
+
+    return {
+      ok: true,
+      id: messageId,
+    }
+  } catch (error) {
+    await markCampaignJobFailed(
+      row,
+      campaignId,
+      error?.message || 'Falha ao enviar a mensagem.',
+      false,
+    )
+
+    return {
+      ok: false,
+      error: String(error),
+    }
+  }
+}
+
+async function runCampaignDrain(
+  sessionId,
+  campaignId,
+  workspaceId,
+) {
+  return withSessionLock(
+    sessionId,
+    async () => {
+      const handle = await openSocket(
+        sessionId,
+        260_000,
+      )
+
+      // Usado por sendCampaignRow para gravar idempotência.
+      handle.sessionId = sessionId
+
+      let processed = 0
+      const deadline = Date.now() + 235_000
+
+      try {
+        await waitForOpen(
+          handle,
+          30_000,
+        )
+
+        while (Date.now() < deadline) {
+          const state = await campaignState(
+            campaignId,
+            workspaceId,
+          )
+
+          if (
+            !state ||
+            state.status !== 'running'
+          ) {
+            return {
+              processed,
+              hasMore: false,
+              status:
+                state?.status ||
+                'missing',
+            }
+          }
+
+          const rows = await claimCampaignBatch(
+            campaignId,
+            workspaceId,
+            sessionId,
+            15,
+          )
+
+          if (!rows.length) {
+            const refreshed =
+              await finishCampaignIfDone(
+                campaignId,
+                workspaceId,
+              )
+
+            if (
+              !refreshed ||
+              refreshed.status !== 'running'
+            ) {
+              return {
+                processed,
+                hasMore: false,
+                status:
+                  refreshed?.status ||
+                  'completed',
+              }
+            }
+
+            const nextAt =
+              refreshed.next_available_at
+                ? new Date(
+                    refreshed.next_available_at
+                  ).getTime()
+                : Date.now() + 700
+
+            const waitMs = Math.max(
+              250,
+              Math.min(
+                1500,
+                nextAt - Date.now(),
+              ),
+            )
+
+            await sleep(waitMs)
+            continue
+          }
+
+          const requestIds =
+            rows.map(
+              row => row.idempotency_key
+            )
+
+          const existing = await pool.query(
+            `
+            SELECT
+              request_id,
+              message_id
+            FROM baileys_sent_requests
+            WHERE
+              session_id = $1
+              AND request_id = ANY($2)
+            `,
+            [
+              sessionId,
+              requestIds,
+            ],
+          )
+
+          const existingByRequest =
+            new Map(
+              existing.rows.map(row => [
+                row.request_id,
+                row.message_id,
+              ])
+            )
+
+          const numbers = [
+            ...new Set(
+              rows
+                .filter(
+                  row =>
+                    !existingByRequest.has(
+                      row.idempotency_key
+                    )
+                )
+                .map(
+                  row =>
+                    String(
+                      row.phone_e164 || ''
+                    ).replace(/\D/g, '')
+                )
+                .filter(Boolean)
+            ),
+          ]
+
+          const checked =
+            numbers.length
+              ? await handle.sock.onWhatsApp(
+                  ...numbers
+                )
+              : []
+
+          const jidByNumber = new Map()
+
+          for (const item of checked) {
+            const number =
+              String(item?.jid || '')
+                .split('@', 1)[0]
+
+            if (
+              item?.exists &&
+              number
+            ) {
+              jidByNumber.set(
+                number,
+                item.jid,
+              )
+            }
+          }
+
+          for (const row of rows) {
+            const current = await campaignState(
+              campaignId,
+              workspaceId,
+            )
+
+            if (
+              !current ||
+              current.status !== 'running'
+            ) {
+              await pool.query(
+                `
+                UPDATE outbox_jobs
+                SET
+                  status = $2,
+                  locked_at = NULL
+                WHERE id = $1
+                `,
+                [
+                  row.job_id,
+                  current?.status === 'paused'
+                    ? 'paused'
+                    : 'cancelled',
+                ],
+              )
+
+              continue
+            }
+
+            const normalizedNumber =
+              String(
+                row.phone_e164 || ''
+              ).replace(/\D/g, '')
+
+            await sendCampaignRow(
+              handle,
+              row,
+              campaignId,
+              existingByRequest.get(
+                row.idempotency_key
+              ) || null,
+              jidByNumber.get(
+                normalizedNumber
+              ) || null,
+            )
+
+            processed += 1
+
+            await sleep(300)
+          }
+
+          await handle.flush()
+        }
+
+        const state = await campaignState(
+          campaignId,
+          workspaceId,
+        )
+
+        return {
+          processed,
+          hasMore:
+            Boolean(
+              state
+              && state.status === 'running'
+              && Number(state.pending || 0) > 0
+            ),
+          status:
+            state?.status ||
+            'missing',
+        }
+      } finally {
+        try {
+          await handle.flush()
+        } catch {}
+
+        handle.close()
+      }
+    },
+  )
+}
+
+async function triggerCampaignDrain(
+  baseUrl,
+  sessionId,
+  campaignId,
+  workspaceId,
+) {
+  const action = 'drain-campaign'
+  const body = {
+    campaignId,
+    workspaceId,
+  }
+  const canonical = stableJson(body)
+  const timestamp = String(
+    Math.floor(Date.now() / 1000)
+  )
+  const signature = createHmac(
+    'sha256',
+    appSecret,
+  )
+    .update(
+      `${timestamp}.${action}.${sessionId}.${canonical}`
+    )
+    .digest('hex')
+
+  return fetch(
+    `${baseUrl}/baileys-internal?action=${action}&sessionId=${encodeURIComponent(sessionId)}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Nexo-Timestamp': timestamp,
+        'X-Nexo-Signature': signature,
+      },
+      body: canonical,
+    },
+  )
+}
+
 function authorized(request, action, sessionId, body) {
   const timestamp = String(request.headers['x-nexo-timestamp'] || '')
   const signature = String(request.headers['x-nexo-signature'] || '')
@@ -680,7 +1470,7 @@ async function waitForOpen(socketHandle, timeoutMs = 25_000) {
   if (result.kind !== 'open') throw new Error(result.kind === 'qr' ? 'A sessão precisa ser pareada pelo QR.' : result.error || 'Não foi possível conectar a sessão.')
 }
 
-async function handleAction(action, sessionId, body) {
+async function handleAction(action, sessionId, body, request) {
   if (action === 'status') return sessionSnapshot(sessionId)
 
   if (action === 'disconnect') {
@@ -714,6 +1504,138 @@ async function handleAction(action, sessionId, body) {
       return { results: result.map(item => ({ query: item.jid?.split('@', 1)[0], jid: item.jid, exists: Boolean(item.exists) })) }
     } finally { handle.close() }
   }
+  if (action === 'drain-campaign') {
+    const campaignId = String(
+      body.campaignId || ''
+    ).trim()
+    const workspaceId = String(
+      body.workspaceId || ''
+    ).trim()
+
+    if (!campaignId || !workspaceId) {
+      const error = new Error(
+        'Campanha ou workspace inválido.'
+      )
+      error.status = 422
+      throw error
+    }
+
+    const host = String(
+      request.headers.host || ''
+    )
+
+    const baseUrl =
+      process.env.VERCEL_PROJECT_PRODUCTION_URL
+        ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+        : `https://${host}`
+
+    waitUntil(
+      (async () => {
+        try {
+          const result =
+            await runCampaignDrain(
+              sessionId,
+              campaignId,
+              workspaceId,
+            )
+
+          console.info(
+            '[Baileys] campaign drain finished',
+            {
+              sessionId,
+              campaignId,
+              processed:
+                result.processed,
+              hasMore:
+                result.hasMore,
+              status:
+                result.status,
+            },
+          )
+
+          if (result.hasMore) {
+            await sleep(500)
+
+            await triggerCampaignDrain(
+              baseUrl,
+              sessionId,
+              campaignId,
+              workspaceId,
+            )
+          }
+        } catch (error) {
+          const message =
+            String(error || '')
+
+          console.error(
+            '[Baileys] campaign drain failed',
+            {
+              sessionId,
+              campaignId,
+              error: message,
+            },
+          )
+
+          const normalized =
+            message.toLowerCase()
+
+          if (
+            normalized.includes('pareada pelo qr')
+            || normalized.includes('pareado pelo qr')
+            || normalized.includes('logged out')
+            || normalized.includes('sessão removida')
+            || normalized.includes('sessao removida')
+          ) {
+            await pool.query(
+              `
+              UPDATE campaigns
+              SET status = 'paused'
+              WHERE
+                id = $1
+                AND workspace_id = $2
+                AND status = 'running'
+              `,
+              [
+                campaignId,
+                workspaceId,
+              ],
+            )
+
+            return
+          }
+
+          await sleep(2500)
+
+          try {
+            await triggerCampaignDrain(
+              baseUrl,
+              sessionId,
+              campaignId,
+              workspaceId,
+            )
+          } catch (retryError) {
+            console.error(
+              '[Baileys] campaign drain retry failed',
+              {
+                sessionId,
+                campaignId,
+                error:
+                  String(
+                    retryError || ''
+                  ),
+              },
+            )
+          }
+        }
+      })(),
+    )
+
+    return {
+      started: true,
+      campaignId,
+    }
+  }
+
   if (action === 'batch-messages') {
     return withSessionLock(sessionId, async () => {
       await ensureSchema()
@@ -1168,7 +2090,7 @@ export default async function handler(request, response) {
   if (!/^[a-zA-Z0-9_-]{4,80}$/.test(sessionId)) return response.status(400).json({ error: 'sessionId inválido.' })
   if (!authorized(request, action, sessionId, body)) return response.status(401).json({ error: 'Não autorizado.' })
   try {
-    const result = await handleAction(action, sessionId, body)
+    const result = await handleAction(action, sessionId, body, request)
     return response.status(action === 'create' ? 201 : 200).json(result)
   } catch (error) {
     console.error('[baileys]', { action, sessionId, error: String(error) })
