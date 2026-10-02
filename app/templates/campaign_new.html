@@ -78,7 +78,11 @@
         Canal remetente
         <select name="phone_number_id" required>
           {% for number in numbers %}
-          <option value="{{ number.id }}" data-provider="{{ number.provider }}">
+          <option
+            value="{{ number.id }}"
+            data-provider="{{ number.provider }}"
+            data-internal="{{ '1' if number.waba_id == 'vercel-internal' else '0' }}"
+          >
             {{ number.display_name }} • {{ number.provider_label }} • {{ number.phone_e164 or 'telefone pendente' }}
           </option>
           {% endfor %}
@@ -243,21 +247,27 @@
 
     const option = channelSelect.options[channelSelect.selectedIndex];
     const provider = option?.dataset?.provider || '';
-    const isBaileys = provider === 'baileys';
+    const isInternalBaileys =
+      provider === 'baileys'
+      && option?.dataset?.internal === '1';
+
     const limit = Number(
-      isBaileys
+      isInternalBaileys
         ? rateInput.dataset.baileysMax
         : rateInput.dataset.standardMax
     ) || 40;
 
     rateInput.max = String(limit);
+    rateInput.readOnly = isInternalBaileys;
 
-    if (Number(rateInput.value) > limit) {
+    if (isInternalBaileys) {
+      rateInput.value = String(limit);
+    } else if (Number(rateInput.value) > limit) {
       rateInput.value = String(limit);
     }
 
-    rateHint.textContent = isBaileys
-      ? 'Modo rápido Baileys: até ' + limit + '/min.'
+    rateHint.textContent = isInternalBaileys
+      ? 'Modo automático rápido Baileys: ' + limit + '/min. O worker continua mesmo se você sair da página.'
       : 'Máximo interno: ' + limit + '/min. O intervalo dos blocos também é respeitado.';
   }
 
