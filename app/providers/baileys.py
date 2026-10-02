@@ -328,4 +328,21 @@ class VercelBaileysProvider:
             raise ProviderError("O Baileys aceitou a mídia sem retornar o ID da mensagem.")
         return str(message_id)
 
+    async def send_batch(self, messages: list[dict]) -> list[dict]:
+        data = await self._call(
+            "batch-messages",
+            {
+                "messages": messages[:15],
+            },
+            timeout=55,
+        )
+        results = data.get("results")
+        if not isinstance(results, list):
+            raise ProviderError(
+                "O Baileys não retornou o resultado do lote.",
+                "invalid_batch_response",
+                True,
+            )
+        return results
+
     connection = staticmethod(BaileysProvider.connection)
