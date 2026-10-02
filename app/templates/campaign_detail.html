@@ -125,6 +125,64 @@
   text-align: center;
 }
 
+.campaign-channel-box {
+  display: grid;
+  gap: 10px;
+}
+
+.campaign-channel-current {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.campaign-channel-current i {
+  width: 16px;
+  height: 16px;
+  color: var(--primary);
+}
+
+.campaign-channel-switch {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.campaign-channel-switch select {
+  min-width: 0;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+  padding: 0 10px;
+  color: var(--text);
+  font: inherit;
+}
+
+.campaign-channel-switch button {
+  min-height: 40px;
+  white-space: nowrap;
+}
+
+.campaign-channel-help {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+@media (max-width: 560px) {
+  .campaign-channel-switch {
+    grid-template-columns: 1fr;
+  }
+
+  .campaign-channel-switch button {
+    width: 100%;
+  }
+}
+
 @media (max-width: 950px) {
   .campaign-review-grid {
     grid-template-columns: 1fr;
@@ -174,6 +232,19 @@
 {% if request.query_params.get('contact_updated') %}
 <div class="alert success">
   Telefone atualizado.
+</div>
+{% endif %}
+
+{% if request.query_params.get('switched') %}
+<div class="alert success">
+  <strong>Canal alterado com sucesso.</strong>
+  Os envios já concluídos foram mantidos e os pendentes passaram para o novo canal.
+</div>
+{% endif %}
+
+{% if request.query_params.get('channel_same') %}
+<div class="alert warning">
+  Este canal já é o remetente atual da campanha.
 </div>
 {% endif %}
 
@@ -277,18 +348,65 @@
         </div>
 
 
-        <div class="campaign-info-item">
+        <div class="campaign-info-item campaign-channel-box">
           <span>Canal remetente</span>
 
-          <strong>
-            {{ number.display_name if number else 'Canal não encontrado' }}
-          </strong>
+          <div class="campaign-channel-current">
+            <i data-lucide="smartphone"></i>
+            <div>
+              <strong>
+                {{ number.display_name if number else 'Canal não encontrado' }}
+              </strong>
 
-          {% if number %}
-          <small>
-            {{ number.provider_label }}
-            {% if number.phone_e164 %}
-            • {{ number.phone_e164 }}
+              {% if number %}
+              <small>
+                {{ number.provider_label }}
+                {% if number.phone_e164 %}
+                • {{ number.phone_e164 }}
+                {% endif %}
+              </small>
+              {% endif %}
+            </div>
+          </div>
+
+          {% if campaign.status != 'completed' and available_numbers %}
+          <form
+            class="campaign-channel-switch"
+            method="post"
+            action="/campaigns/{{ campaign.id }}/switch-channel"
+            data-channel-switch-form
+          >
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+
+            <select name="phone_number_id" required data-channel-switch-select>
+              {% for item in available_numbers %}
+              <option
+                value="{{ item.id }}"
+                {% if number and item.id == number.id %}selected{% endif %}
+              >
+                {{ item.display_name }}
+                • {{ item.provider_label }}
+                {% if item.phone_e164 %}
+                • {{ item.phone_e164 }}
+                {% endif %}
+              </option>
+              {% endfor %}
+            </select>
+
+            <button
+              class="secondary"
+              type="submit"
+              data-channel-switch-button
+            >
+              Trocar canal
+            </button>
+          </form>
+
+          <small class="campaign-channel-help">
+            {% if has_media %}
+            Como esta campanha possui mídia, aparecem somente canais Baileys conectados.
+            {% else %}
+            Você pode trocar o remetente mesmo com a campanha em andamento.
             {% endif %}
           </small>
           {% endif %}
@@ -736,6 +854,86 @@
     document.getElementById(
       'campaign-live-message'
     );
+
+  const channelSwitchForm =
+    document.querySelector(
+      '[data-channel-switch-form]'
+    );
+
+  const channelSwitchSelect =
+    document.querySelector(
+      '[data-channel-switch-select]'
+    );
+
+  const channelSwitchButton =
+    document.querySelector(
+      '[data-channel-switch-button]'
+    );
+
+  const initialChannelId =
+    {{ (number.id if number else '') | tojson }};
+
+  function syncChannelSwitchButton() {
+    if (!channelSwitchButton || !channelSwitchSelect) {
+      return;
+    }
+
+    const sameChannel =
+      channelSwitchSelect.value ===
+      initialChannelId;
+
+    channelSwitchButton.disabled =
+      sameChannel;
+
+    channelSwitchButton.textContent =
+      sameChannel
+        ? 'Canal atual'
+        : 'Trocar canal';
+  }
+
+  channelSwitchSelect?.addEventListener(
+    'change',
+    syncChannelSwitchButton
+  );
+
+  syncChannelSwitchButton();
+
+  channelSwitchForm?.addEventListener(
+    'submit',
+    event => {
+      if (
+        !channelSwitchSelect
+        || channelSwitchSelect.value === initialChannelId
+      ) {
+        event.preventDefault();
+        return;
+      }
+
+      const selectedText =
+        channelSwitchSelect.options[
+          channelSwitchSelect.selectedIndex
+        ]?.textContent
+          ?.replace(/\s+/g, ' ')
+          .trim() || 'o novo canal';
+
+      if (
+        !window.confirm(
+          'Trocar o canal desta campanha para ' +
+          selectedText +
+          '?\n\nAs mensagens já enviadas não serão repetidas. Somente os envios pendentes passarão para o novo canal.'
+        )
+      ) {
+        event.preventDefault();
+        return;
+      }
+
+      if (channelSwitchButton) {
+        channelSwitchButton.disabled = true;
+        channelSwitchButton.textContent =
+          'Trocando...';
+      }
+    }
+  );
 
 
   function showMessage(
