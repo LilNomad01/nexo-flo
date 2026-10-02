@@ -1913,11 +1913,7 @@ async def campaign_switch_channel(
             job.available_at = now()
         elif previous_status == "paused":
             job.status = "paused"
-        elif job.status in {
-            "failed",
-            "cancelled",
-            "processing",
-        }:
+        elif previous_status == "draft":
             job.status = "pending"
             job.available_at = now()
 
