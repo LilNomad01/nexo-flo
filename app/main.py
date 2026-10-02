@@ -1341,7 +1341,12 @@ async def create_campaign(request: Request, db: Session = Depends(get_db)):
     except (TypeError, ValueError):
         rate = 20
 
-    rate = max(1, min(rate, settings.max_messages_per_minute))
+    rate_limit = (
+        settings.baileys_max_messages_per_minute
+        if number.provider == "baileys"
+        else settings.max_messages_per_minute
+    )
+    rate = max(1, min(rate, rate_limit))
 
     raw_messages = [str(value).strip() for value in form.getlist("message_block")]
 
@@ -1527,7 +1532,7 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
     )
 
     base_gap = max(
-        1.5,
+        0.5 if number and number.provider == "baileys" else 1.5,
         60.0 / max(1, campaign.processing_rate),
     )
 
@@ -1540,8 +1545,8 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
     )
 
     if number and number.provider == "baileys":
-        average_lead_gap = base_gap * 1.15 + 1.6
-        interval_mode = "Inteligente Baileys"
+        average_lead_gap = base_gap
+        interval_mode = "Baileys rápido"
     else:
         average_lead_gap = base_gap
         interval_mode = "Ritmo padrão"
@@ -1549,11 +1554,6 @@ def campaign_detail(campaign_id: str, request: Request, db: Session = Depends(ge
     estimated_seconds = simulation.eligible * (
         block_seconds + average_lead_gap
     )
-
-    if number and number.provider == "baileys":
-        estimated_seconds += (
-            simulation.eligible // 10
-        ) * 16
 
     estimated_minutes = (
         max(
@@ -1883,7 +1883,7 @@ async def campaign_process(campaign_id: str, request: Request, db: Session = Dep
         processed = await process_available_jobs(
             auth[2].id,
             campaign.id,
-            max_jobs=6 if number and number.provider == "baileys" else 2,
+            max_jobs=10 if number and number.provider == "baileys" else 2,
         )
 
     db.expire_all()
@@ -2059,7 +2059,7 @@ async def campaign_continue_unsent(campaign_id: str, request: Request, db: Sessi
         )
 
     base_gap = max(
-        1.5,
+        0.5 if number.provider == "baileys" else 1.5,
         60.0 / max(
             1,
             campaign.processing_rate,
@@ -2071,16 +2071,7 @@ async def campaign_continue_unsent(campaign_id: str, request: Request, db: Sessi
 
     for index, (job, message) in enumerate(rows):
         if index > 0:
-            cursor += (
-                base_gap
-                + ((index * 7) % 9) / 10
-            )
-
-            if (
-                number.provider == "baileys"
-                and index % 10 == 0
-            ):
-                cursor += 12
+            cursor += base_gap
 
         job.status = "pending"
         job.attempts = 0
@@ -2423,13 +2414,7 @@ async def campaign_control(campaign_id: str, operation: str, request: Request, d
                     message.error_message = None
 
             if index > 0:
-                cursor += (
-                    base_gap
-                    + ((index * 7) % 9) / 10
-                )
-
-                if index % 10 == 0:
-                    cursor += 12
+                cursor += base_gap
 
             job.available_at = (
                 now()
