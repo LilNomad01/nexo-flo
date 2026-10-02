@@ -1883,7 +1883,9 @@ async def campaign_process(campaign_id: str, request: Request, db: Session = Dep
         processed = await process_available_jobs(
             auth[2].id,
             campaign.id,
-            max_jobs=10 if number and number.provider == "baileys" else 2,
+            # Baileys abre uma sessão por envio nesta arquitetura.
+            # Lotes grandes ultrapassam o timeout serverless de 60s.
+            max_jobs=2 if number and number.provider == "baileys" else 2,
         )
 
     db.expire_all()
