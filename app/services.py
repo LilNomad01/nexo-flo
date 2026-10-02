@@ -1,4 +1,3 @@
-import random
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -90,35 +89,15 @@ def simulate_campaign(db: Session, workspace_id: str, campaign: Campaign) -> Sim
 
 def _smart_baileys_lead_gap(campaign: Campaign, contact: Contact, lead_index: int) -> float:
     """
-    Suaviza o ritmo entre destinatários Baileys.
+    Usa o ritmo configurado da campanha sem pausas artificiais extras.
 
-    Mantém o limite da campanha, adiciona uma pequena variação no intervalo,
-    começa um pouco mais devagar e insere pausas periódicas para evitar rajadas.
+    O processamento do Baileys agora ocorre em lotes curtos, então não é
+    necessário adicionar warmup, jitter e pausas a cada 10 contatos.
     """
-    base_gap = max(
+    return max(
         1.5,
         60.0 / max(1, campaign.processing_rate),
     )
-
-    rng = random.Random(
-        f"{campaign.id}:{contact.id}:{lead_index}"
-    )
-
-    if lead_index < 10:
-        warmup_factor = 1.40
-    elif lead_index < 25:
-        warmup_factor = 1.15
-    else:
-        warmup_factor = 1.0
-
-    jitter_factor = rng.uniform(0.85, 1.25)
-
-    gap = base_gap * warmup_factor * jitter_factor
-
-    if lead_index > 0 and lead_index % 10 == 0:
-        gap += rng.uniform(10.0, 22.0)
-
-    return gap
 
 
 def enqueue_campaign(db: Session, workspace_id: str, campaign: Campaign) -> int:
