@@ -345,4 +345,18 @@ class VercelBaileysProvider:
             )
         return results
 
+    async def start_campaign_drain(
+        self,
+        campaign_id: str,
+        workspace_id: str,
+    ) -> dict:
+        return await self._call(
+            "drain-campaign",
+            {
+                "campaignId": campaign_id,
+                "workspaceId": workspace_id,
+            },
+            timeout=15,
+        )
+
     connection = staticmethod(BaileysProvider.connection)
