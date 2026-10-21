@@ -44,6 +44,12 @@
 
     {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 
+    {% if database_unavailable %}
+    <div class="alert warning">
+      O banco de dados está temporariamente indisponível. A página continua online e você pode tentar entrar novamente em instantes.
+    </div>
+    {% endif %}
+
     <form method="post" action="/login" class="stack auth-form">
       <input type="hidden" name="csrf" value="{{ csrf }}">
 
