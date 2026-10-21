@@ -11,7 +11,21 @@ export const maxDuration = 300
 const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL
 const appSecret = process.env.APP_SECRET || ''
 const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL || 'info' })
-const pool = new pg.Pool({ connectionString: databaseUrl, max: 3, ssl: databaseUrl?.includes('localhost') ? false : { rejectUnauthorized: false } })
+const pool = new pg.Pool({
+  connectionString: databaseUrl,
+  max: Math.max(
+    4,
+    Math.min(
+      Number(process.env.BAILEYS_DB_POOL_MAX || 12),
+      16,
+    ),
+  ),
+  idleTimeoutMillis: 20_000,
+  connectionTimeoutMillis: 10_000,
+  ssl: databaseUrl?.includes('localhost')
+    ? false
+    : { rejectUnauthorized: false },
+})
 const encryptionKey = createHash('sha256').update(appSecret).digest()
 let schemaPromise
 
