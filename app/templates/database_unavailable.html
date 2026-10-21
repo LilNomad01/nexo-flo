@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Nexo Flow • Banco temporariamente indisponível{% endblock %}
+
+{% block auth_content %}
+<div class="auth-layout">
+  <section class="auth-promo">
+    <div class="auth-promo-brand auth-promo-logo-wrap">
+      <img
+        class="auth-brand-logo"
+        src="/static/nexo-flow-logo.webp"
+        alt="Nexo Flow"
+      >
+    </div>
+
+    <div class="auth-promo-copy">
+      <span class="auth-kicker">Nexo Flow online</span>
+      <h1>O painel está no ar, mas o banco está indisponível.</h1>
+      <p>
+        A aplicação continua funcionando. Assim que a conexão com o banco voltar,
+        seus dados e campanhas ficam acessíveis novamente.
+      </p>
+    </div>
+
+    <div class="auth-benefits">
+      <div><i data-lucide="shield-check"></i><span>Seus dados não foram apagados</span></div>
+      <div><i data-lucide="refresh-cw"></i><span>Pode tentar novamente sem recriar nada</span></div>
+      <div><i data-lucide="database"></i><span>Falha isolada na camada de banco</span></div>
+    </div>
+  </section>
+
+  <section class="auth-card auth-card-v3">
+    <div class="auth-mobile-brand auth-mobile-logo-wrap">
+      <img
+        class="auth-mobile-logo"
+        src="/static/nexo-flow-logo.webp"
+        alt="Nexo Flow"
+      >
+    </div>
+
+    <p class="eyebrow">Indisponibilidade temporária</p>
+    <h2>Não foi possível carregar os dados agora</h2>
+    <p class="muted">{{ message }}</p>
+
+    <div class="alert warning">
+      O site continua online. O problema está na conexão/quota do banco de dados.
+    </div>
+
+    <div class="stack">
+      <a class="primary full" href="{{ request.url.path }}">
+        Tentar novamente
+      </a>
+      <a class="secondary full" href="/login">
+        Voltar para o login
+      </a>
+    </div>
+  </section>
+</div>
+{% endblock %}
