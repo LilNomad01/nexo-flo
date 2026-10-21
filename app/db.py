@@ -2,12 +2,22 @@ from contextlib import contextmanager
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from .config import settings
 
 engine_options = {"pool_pre_ping": True}
+
 if settings.database_url.startswith("sqlite"):
     engine_options["connect_args"] = {"check_same_thread": False}
+elif settings.database_url.startswith("postgresql"):
+    # Em Vercel/serverless, cada instância manter um QueuePool próprio pode
+    # multiplicar conexões rapidamente. O pooler do Neon já faz o pooling;
+    # aqui abrimos a conexão somente durante a requisição e a devolvemos.
+    engine_options["poolclass"] = NullPool
+    engine_options["connect_args"] = {
+        "connect_timeout": 6,
+    }
 
 engine = create_engine(settings.database_url, **engine_options)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
