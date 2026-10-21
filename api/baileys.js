@@ -14,10 +14,10 @@ const logger = pino({ level: process.env.BAILEYS_LOG_LEVEL || 'info' })
 const pool = new pg.Pool({
   connectionString: databaseUrl,
   max: Math.max(
-    4,
+    2,
     Math.min(
-      Number(process.env.BAILEYS_DB_POOL_MAX || 12),
-      16,
+      Number(process.env.BAILEYS_DB_POOL_MAX || 4),
+      6,
     ),
   ),
   idleTimeoutMillis: 20_000,
@@ -507,208 +507,27 @@ async function finishCampaignIfDone(
   }
 }
 
-async function markCampaignJobSent(
-  row,
-  messageId,
-  campaignId,
-) {
-  const client = await pool.connect()
-
-  try {
-    await client.query('BEGIN')
-
-    await client.query(
-      `
-      UPDATE messages
-      SET
-        status = 'sent',
-        provider_message_id = $2,
-        sent_at = now(),
-        error_message = NULL
-      WHERE id = $1
-      `,
-      [
-        row.message_id,
-        messageId || null,
-      ],
-    )
-
-    await client.query(
-      `
-      UPDATE outbox_jobs
-      SET
-        status = 'sent',
-        locked_at = NULL,
-        last_error = NULL
-      WHERE id = $1
-      `,
-      [row.job_id],
-    )
-
-    await client.query(
-      `
-      UPDATE campaign_recipients
-      SET
-        status = 'sent',
-        reason = NULL
-      WHERE
-        campaign_id = $1
-        AND contact_id = $2
-      `,
-      [
-        campaignId,
-        row.contact_id,
-      ],
-    )
-
-    await client.query('COMMIT')
-  } catch (error) {
-    try {
-      await client.query('ROLLBACK')
-    } catch {}
-
-    throw error
-  } finally {
-    client.release()
-  }
-}
-
-async function markCampaignJobFailed(
-  row,
-  campaignId,
-  message,
-  permanent = false,
-) {
-  const finalFailure =
-    permanent ||
-    Number(row.attempt || 1) >= 4
-
-  const client = await pool.connect()
-
-  try {
-    await client.query('BEGIN')
-
-    if (finalFailure) {
-      await client.query(
-        `
-        UPDATE messages
-        SET
-          status = 'failed',
-          error_message = $2
-        WHERE id = $1
-        `,
-        [
-          row.message_id,
-          String(message || 'Falha no envio').slice(0, 1000),
-        ],
-      )
-
-      await client.query(
-        `
-        UPDATE outbox_jobs
-        SET
-          status = 'failed',
-          locked_at = NULL,
-          last_error = $2
-        WHERE id = $1
-        `,
-        [
-          row.job_id,
-          String(message || 'Falha no envio').slice(0, 1000),
-        ],
-      )
-
-      await client.query(
-        `
-        UPDATE campaign_recipients
-        SET
-          status = 'failed',
-          reason = $3
-        WHERE
-          campaign_id = $1
-          AND contact_id = $2
-        `,
-        [
-          campaignId,
-          row.contact_id,
-          String(message || 'Falha no envio').slice(0, 160),
-        ],
-      )
-    } else {
-      await client.query(
-        `
-        UPDATE messages
-        SET
-          status = 'queued',
-          error_message = $2
-        WHERE id = $1
-        `,
-        [
-          row.message_id,
-          String(message || 'Falha temporária').slice(0, 1000),
-        ],
-      )
-
-      await client.query(
-        `
-        UPDATE outbox_jobs
-        SET
-          status = 'pending',
-          locked_at = NULL,
-          last_error = $2,
-          available_at = now() + interval '3 seconds'
-        WHERE id = $1
-        `,
-        [
-          row.job_id,
-          String(message || 'Falha temporária').slice(0, 1000),
-        ],
-      )
-    }
-
-    await client.query('COMMIT')
-  } catch (error) {
-    try {
-      await client.query('ROLLBACK')
-    } catch {}
-
-    throw error
-  } finally {
-    client.release()
-  }
-}
-
-async function sendCampaignRow(
+async function sendCampaignRowFast(
   handle,
   row,
-  campaignId,
   existingMessageId = null,
   jid = null,
 ) {
   if (existingMessageId) {
-    await markCampaignJobSent(
-      row,
-      existingMessageId,
-      campaignId,
-    )
-
     return {
-      ok: true,
+      row,
+      status: 'sent',
+      messageId: existingMessageId,
       duplicate: true,
     }
   }
 
   if (!jid) {
-    await markCampaignJobFailed(
-      row,
-      campaignId,
-      'O número do destinatário não está cadastrado no WhatsApp.',
-      true,
-    )
-
     return {
-      ok: false,
-      permanent: true,
+      row,
+      status: 'failed',
+      final: true,
+      error: 'O número do destinatário não está cadastrado no WhatsApp.',
     }
   }
 
@@ -759,46 +578,266 @@ async function sendCampaignRow(
       )
     }
 
-    await pool.query(
-      `
-      INSERT INTO baileys_sent_requests (
-        session_id,
-        request_id,
-        message_id
-      )
-      VALUES ($1,$2,$3)
-      ON CONFLICT (session_id, request_id)
-      DO NOTHING
-      `,
-      [
-        handle.sessionId,
-        row.idempotency_key,
-        messageId,
-      ],
-    )
-
-    await markCampaignJobSent(
-      row,
-      messageId,
-      campaignId,
-    )
-
     return {
-      ok: true,
-      id: messageId,
+      row,
+      status: 'sent',
+      messageId,
+      duplicate: false,
     }
   } catch (error) {
-    await markCampaignJobFailed(
-      row,
-      campaignId,
-      error?.message || 'Falha ao enviar a mensagem.',
-      false,
-    )
-
     return {
-      ok: false,
-      error: String(error),
+      row,
+      status: 'failed',
+      final:
+        Number(row.attempt || 1) >= 4,
+      error:
+        error?.message ||
+        'Falha temporária no envio.',
     }
+  }
+}
+
+async function persistCampaignChunkResults(
+  outcomes,
+  campaignId,
+  sessionId,
+) {
+  if (!outcomes.length) return
+
+  const sent = outcomes
+    .filter(item => item.status === 'sent')
+    .map(item => ({
+      request_id: item.row.idempotency_key,
+      provider_message_id: item.messageId || null,
+      message_id: item.row.message_id,
+      job_id: item.row.job_id,
+      contact_id: item.row.contact_id,
+    }))
+
+  const failed = outcomes
+    .filter(item => item.status === 'failed')
+    .map(item => ({
+      message_id: item.row.message_id,
+      job_id: item.row.job_id,
+      contact_id: item.row.contact_id,
+      error: String(item.error || 'Falha no envio').slice(0, 1000),
+      reason: String(item.error || 'Falha no envio').slice(0, 160),
+      final: Boolean(item.final),
+    }))
+
+  const client = await pool.connect()
+
+  try {
+    await client.query('BEGIN')
+
+    if (sent.length) {
+      const sentJson = JSON.stringify(sent)
+
+      await client.query(
+        `
+        WITH data AS (
+          SELECT *
+          FROM jsonb_to_recordset($1::jsonb)
+          AS x(
+            request_id text,
+            provider_message_id text,
+            message_id text,
+            job_id text,
+            contact_id text
+          )
+        )
+        INSERT INTO baileys_sent_requests (
+          session_id,
+          request_id,
+          message_id
+        )
+        SELECT
+          $2,
+          data.request_id,
+          data.provider_message_id
+        FROM data
+        WHERE data.provider_message_id IS NOT NULL
+        ON CONFLICT (session_id, request_id)
+        DO NOTHING
+        `,
+        [sentJson, sessionId],
+      )
+
+      await client.query(
+        `
+        WITH data AS (
+          SELECT *
+          FROM jsonb_to_recordset($1::jsonb)
+          AS x(
+            request_id text,
+            provider_message_id text,
+            message_id text,
+            job_id text,
+            contact_id text
+          )
+        )
+        UPDATE messages AS message
+        SET
+          status = 'sent',
+          provider_message_id = data.provider_message_id,
+          sent_at = now(),
+          error_message = NULL
+        FROM data
+        WHERE message.id = data.message_id
+        `,
+        [sentJson],
+      )
+
+      await client.query(
+        `
+        WITH data AS (
+          SELECT *
+          FROM jsonb_to_recordset($1::jsonb)
+          AS x(
+            request_id text,
+            provider_message_id text,
+            message_id text,
+            job_id text,
+            contact_id text
+          )
+        )
+        UPDATE outbox_jobs AS job
+        SET
+          status = 'sent',
+          locked_at = NULL,
+          last_error = NULL
+        FROM data
+        WHERE job.id = data.job_id
+        `,
+        [sentJson],
+      )
+
+      await client.query(
+        `
+        WITH data AS (
+          SELECT *
+          FROM jsonb_to_recordset($1::jsonb)
+          AS x(
+            request_id text,
+            provider_message_id text,
+            message_id text,
+            job_id text,
+            contact_id text
+          )
+        )
+        UPDATE campaign_recipients AS recipient
+        SET
+          status = 'sent',
+          reason = NULL
+        FROM data
+        WHERE
+          recipient.campaign_id = $2
+          AND recipient.contact_id = data.contact_id
+        `,
+        [sentJson, campaignId],
+      )
+    }
+
+    if (failed.length) {
+      const failedJson = JSON.stringify(failed)
+
+      await client.query(
+        `
+        WITH data AS (
+          SELECT *
+          FROM jsonb_to_recordset($1::jsonb)
+          AS x(
+            message_id text,
+            job_id text,
+            contact_id text,
+            error text,
+            reason text,
+            final boolean
+          )
+        )
+        UPDATE messages AS message
+        SET
+          status = CASE
+            WHEN data.final THEN 'failed'
+            ELSE 'queued'
+          END,
+          error_message = data.error
+        FROM data
+        WHERE message.id = data.message_id
+        `,
+        [failedJson],
+      )
+
+      await client.query(
+        `
+        WITH data AS (
+          SELECT *
+          FROM jsonb_to_recordset($1::jsonb)
+          AS x(
+            message_id text,
+            job_id text,
+            contact_id text,
+            error text,
+            reason text,
+            final boolean
+          )
+        )
+        UPDATE outbox_jobs AS job
+        SET
+          status = CASE
+            WHEN data.final THEN 'failed'
+            ELSE 'pending'
+          END,
+          locked_at = NULL,
+          last_error = data.error,
+          available_at = CASE
+            WHEN data.final
+              THEN job.available_at
+            ELSE now() + interval '2 seconds'
+          END
+        FROM data
+        WHERE job.id = data.job_id
+        `,
+        [failedJson],
+      )
+
+      await client.query(
+        `
+        WITH data AS (
+          SELECT *
+          FROM jsonb_to_recordset($1::jsonb)
+          AS x(
+            message_id text,
+            job_id text,
+            contact_id text,
+            error text,
+            reason text,
+            final boolean
+          )
+        )
+        UPDATE campaign_recipients AS recipient
+        SET
+          status = 'failed',
+          reason = data.reason
+        FROM data
+        WHERE
+          data.final
+          AND recipient.campaign_id = $2
+          AND recipient.contact_id = data.contact_id
+        `,
+        [failedJson, campaignId],
+      )
+    }
+
+    await client.query('COMMIT')
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK')
+    } catch {}
+
+    throw error
+  } finally {
+    client.release()
   }
 }
 
@@ -1051,18 +1090,17 @@ async function runCampaignDrain(
               offset + BAILEYS_CAMPAIGN_CONCURRENCY,
             )
 
-            const settled =
-              await Promise.allSettled(
+            const outcomes =
+              await Promise.all(
                 chunk.map(row => {
                   const normalizedNumber =
                     String(
                       row.phone_e164 || ''
                     ).replace(/\D/g, '')
 
-                  return sendCampaignRow(
+                  return sendCampaignRowFast(
                     handle,
                     row,
-                    campaignId,
                     existingByRequest.get(
                       row.idempotency_key
                     ) || null,
@@ -1073,30 +1111,16 @@ async function runCampaignDrain(
                 })
               )
 
-            processed += settled.length
+            await persistCampaignChunkResults(
+              outcomes,
+              campaignId,
+              sessionId,
+            )
 
-            const rejected =
-              settled.filter(
-                item =>
-                  item.status === 'rejected'
-              )
-
-            if (rejected.length) {
-              console.warn(
-                '[Baileys] concurrent campaign chunk had rejected promises',
-                {
-                  sessionId,
-                  campaignId,
-                  rejected:
-                    rejected.length,
-                  concurrency:
-                    BAILEYS_CAMPAIGN_CONCURRENCY,
-                },
-              )
-            }
+            processed += outcomes.length
 
             // Não há atraso artificial entre chunks.
-            // O próximo grupo entra assim que o socket conclui o atual.
+            // O próximo grupo entra assim que socket e banco concluem o atual.
           }
 
           await handle.flush()
