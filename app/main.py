@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -68,8 +68,26 @@ worker_stop = asyncio.Event()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    init_db()
-    task = asyncio.create_task(run_worker(worker_stop)) if settings.run_worker else None
+    db_ready = True
+
+    try:
+        init_db()
+    except SQLAlchemyError as exc:
+        # O banco não deve impedir a função web inteira de subir. Em caso de
+        # quota/indisponibilidade do Neon, as rotas continuam respondendo e o
+        # usuário recebe uma página controlada em vez de FUNCTION_INVOCATION_FAILED.
+        db_ready = False
+        print(
+            "[Nexo Flow] banco indisponível durante o startup:",
+            str(exc)[:1000],
+        )
+
+    task = (
+        asyncio.create_task(run_worker(worker_stop))
+        if settings.run_worker and db_ready
+        else None
+    )
+
     try:
         yield
     finally:
@@ -208,6 +226,38 @@ def anonymous_page(request: Request, name: str, **context):
     return response
 
 
+@app.exception_handler(SQLAlchemyError)
+async def database_error(request: Request, exc: SQLAlchemyError):
+    message = (
+        "O banco de dados está temporariamente indisponível. "
+        "O Nexo Flow continua online, mas os dados não podem ser carregados agora."
+    )
+
+    print(
+        "[Nexo Flow] erro de banco:",
+        str(exc)[:1000],
+    )
+
+    if request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {
+                "detail": message,
+                "code": "database_temporarily_unavailable",
+            },
+            status_code=503,
+        )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="database_unavailable.html",
+        context={
+            "request": request,
+            "message": message,
+        },
+        status_code=503,
+    )
+
+
 @app.exception_handler(HTTPException)
 async def http_error(request: Request, exc: HTTPException):
     if exc.status_code == 401 and not request.url.path.startswith("/api/"):
@@ -265,7 +315,21 @@ async def register(request: Request, db: Session = Depends(get_db)):
 def login_page(request: Request, db: Session = Depends(get_db)):
     if _session(request):
         return RedirectResponse("/dashboard", status_code=303)
-    return anonymous_page(request, "login.html", registration_open=registration_open(db))
+
+    try:
+        can_register = registration_open(db)
+        database_unavailable = False
+    except SQLAlchemyError:
+        db.rollback()
+        can_register = False
+        database_unavailable = True
+
+    return anonymous_page(
+        request,
+        "login.html",
+        registration_open=can_register,
+        database_unavailable=database_unavailable,
+    )
 
 
 @app.post("/login")
