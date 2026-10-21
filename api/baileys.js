@@ -170,6 +170,22 @@ function buildOutboundContent(textValue, mediaValue) {
 const sleep = milliseconds =>
   new Promise(resolve => setTimeout(resolve, milliseconds))
 
+const BAILEYS_CAMPAIGN_BATCH_SIZE = Math.max(
+  15,
+  Math.min(
+    Number(process.env.BAILEYS_CAMPAIGN_BATCH_SIZE || 60),
+    80,
+  ),
+)
+
+const BAILEYS_CAMPAIGN_CONCURRENCY = Math.max(
+  2,
+  Math.min(
+    Number(process.env.BAILEYS_CAMPAIGN_CONCURRENCY || 8),
+    12,
+  ),
+)
+
 async function claimCampaignDrainLease(
   campaignId,
   workspaceId,
@@ -256,7 +272,7 @@ async function claimCampaignBatch(
   campaignId,
   workspaceId,
   sessionId,
-  limit = 15,
+  limit = BAILEYS_CAMPAIGN_BATCH_SIZE,
 ) {
   const client = await pool.connect()
 
@@ -339,7 +355,13 @@ async function claimCampaignBatch(
         campaignId,
         workspaceId,
         sessionId,
-        Math.max(1, Math.min(Number(limit) || 15, 15)),
+        Math.max(
+          1,
+          Math.min(
+            Number(limit) || BAILEYS_CAMPAIGN_BATCH_SIZE,
+            BAILEYS_CAMPAIGN_BATCH_SIZE,
+          ),
+        ),
       ],
     )
 
@@ -842,7 +864,7 @@ async function runCampaignDrain(
             campaignId,
             workspaceId,
             sessionId,
-            15,
+            BAILEYS_CAMPAIGN_BATCH_SIZE,
           )
 
           await refreshCampaignDrainLease(
@@ -962,7 +984,11 @@ async function runCampaignDrain(
             }
           }
 
-          for (const row of rows) {
+          for (
+            let offset = 0;
+            offset < rows.length;
+            offset += BAILEYS_CAMPAIGN_CONCURRENCY
+          ) {
             const current = await campaignState(
               campaignId,
               workspaceId,
@@ -975,49 +1001,88 @@ async function runCampaignDrain(
               || current.waba_id !== 'vercel-internal'
               || current.session_id !== sessionId
             ) {
-              await pool.query(
-                `
-                UPDATE outbox_jobs
-                SET
-                  status = $2,
-                  locked_at = NULL
-                WHERE id = $1
-                `,
-                [
-                  row.job_id,
-                  current?.status === 'paused'
-                    ? 'paused'
-                    : (
-                        current?.status === 'running'
-                          ? 'pending'
-                          : 'cancelled'
-                      ),
-                ],
-              )
+              const remainingRows =
+                rows.slice(offset)
 
-              continue
+              if (remainingRows.length) {
+                await pool.query(
+                  `
+                  UPDATE outbox_jobs
+                  SET
+                    status = $2,
+                    locked_at = NULL,
+                    available_at = now()
+                  WHERE id = ANY($1)
+                  `,
+                  [
+                    remainingRows.map(
+                      item => item.job_id
+                    ),
+                    current?.status === 'paused'
+                      ? 'paused'
+                      : (
+                          current?.status === 'running'
+                            ? 'pending'
+                            : 'cancelled'
+                        ),
+                  ],
+                )
+              }
+
+              break
             }
 
-            const normalizedNumber =
-              String(
-                row.phone_e164 || ''
-              ).replace(/\D/g, '')
-
-            await sendCampaignRow(
-              handle,
-              row,
-              campaignId,
-              existingByRequest.get(
-                row.idempotency_key
-              ) || null,
-              jidByNumber.get(
-                normalizedNumber
-              ) || null,
+            const chunk = rows.slice(
+              offset,
+              offset + BAILEYS_CAMPAIGN_CONCURRENCY,
             )
 
-            processed += 1
+            const settled =
+              await Promise.allSettled(
+                chunk.map(row => {
+                  const normalizedNumber =
+                    String(
+                      row.phone_e164 || ''
+                    ).replace(/\D/g, '')
 
-            await sleep(300)
+                  return sendCampaignRow(
+                    handle,
+                    row,
+                    campaignId,
+                    existingByRequest.get(
+                      row.idempotency_key
+                    ) || null,
+                    jidByNumber.get(
+                      normalizedNumber
+                    ) || null,
+                  )
+                })
+              )
+
+            processed += settled.length
+
+            const rejected =
+              settled.filter(
+                item =>
+                  item.status === 'rejected'
+              )
+
+            if (rejected.length) {
+              console.warn(
+                '[Baileys] concurrent campaign chunk had rejected promises',
+                {
+                  sessionId,
+                  campaignId,
+                  rejected:
+                    rejected.length,
+                  concurrency:
+                    BAILEYS_CAMPAIGN_CONCURRENCY,
+                },
+              )
+            }
+
+            // Não há atraso artificial entre chunks.
+            // O próximo grupo entra assim que o socket conclui o atual.
           }
 
           await handle.flush()
